@@ -11,7 +11,6 @@ Consider the very useful but much-maligned nub, which removes duplicates from a
 list:
 
 ```haskell
-
 nub :: (Eq a) => [a] -> [a]
 nub = nubBy (==)
 
@@ -51,7 +50,6 @@ Yes! :)
 Haskell defines types ST s a and STRef s a that support—amongst others—the following operations:
 
 ```haskell
-
 newSTRef :: a -> ST s (STRef s a)
 readSTRef :: STRef s a -> ST s a
 writeSTRef :: STRef s a -> a -> ST s ()
@@ -124,7 +122,6 @@ Similarly we can show that the compiler will not allow us to pass in an STRef to
 be evaluated by runST:
 
 ```haskell
-
 let v = runST (newVar True)
   in runST (readVar v)
 ```

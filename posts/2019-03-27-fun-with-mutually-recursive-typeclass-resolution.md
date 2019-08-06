@@ -57,7 +57,6 @@ This was, in fact, the first encoding I attempted but it has a couple of
 problems. If we examine the Sangria types more closely we find:
 
 ```scala
-
 val StringType: InputType[String @@ CoercedScalaResult] //via some indirection
 
 case class ListInputType[T](ofType: InputType[T]) extends InputType[Seq[T]]
@@ -136,7 +135,6 @@ We now need to get a list of fields from our domain class and turn them into a
 list of `InputField[_]`. We can use Shapeless for that!
 
 ```scala
-
 trait LowestPriorityInstances {
 
   implicit def toInputTypeViaGeneric[A, Repr](
