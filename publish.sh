@@ -1,3 +1,7 @@
+set -e
+
+git checkout master
+
 stack exec site rebuild
 
 \cp -fr _site /tmp
@@ -13,3 +17,5 @@ git add .
 git commit -m "Publish site"
 
 git push origin gh-pages
+
+git checkout master
