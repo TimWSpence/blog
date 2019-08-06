@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>My Hakyll Blog - Fun with mutually-recursive typeclass resolution</title>
+        <link rel="stylesheet" href="../css/default.css" />
+    </head>
+    <body>
+        <header>
+            <div class="logo">
+                <a href="../">My Hakyll Blog</a>
+            </div>
+            <nav>
+                <a href="../">Home</a>
+                <a href="../about.html">About</a>
+                <a href="../contact.html">Contact</a>
+                <a href="../archive.html">Archive</a>
+            </nav>
+        </header>
+
+        <main role="main">
+            <h1>Fun with mutually-recursive typeclass resolution</h1>
+            <article>
+    <section class="header">
+        Posted on March 27, 2019
+        
+    </section>
+    <section>
+        <p>At Permutive we’ve recently started experimenting with GraphQL, via Sangria. During that process I’ve had to write a few instances of Sangria’sInputType by hand, which had me wondering if they could be derived automatically. I subsequently discovered Sangria supports doing this out of the box (in a slightly more verbose way) but it’s a fun way of demonstrating the power of Shapeless (and the Scala compiler) so I thought I’d write about it anyway!</p>
+<h2 id="the-problem">The problem</h2>
+<p>Sangria requires you to define values which describe the input types you accept. For example, to accept a list of key-value pairs you might write:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb1-1" title="1"><span class="kw">case</span> <span class="kw">class</span> <span class="fu">KeyValue</span>(key: String, value: String)</a>
+<a class="sourceLine" id="cb1-2" title="2"></a>
+<a class="sourceLine" id="cb1-3" title="3"><span class="kw">val</span> inputType = <span class="fu">ListInputType</span>(InputObjectType[KeyValue](</a>
+<a class="sourceLine" id="cb1-4" title="4">    name = <span class="st">&quot;KeyValue&quot;</span>,</a>
+<a class="sourceLine" id="cb1-5" title="5">    fields = List(</a>
+<a class="sourceLine" id="cb1-6" title="6">      <span class="fu">InputField</span>(<span class="st">&quot;key&quot;</span>, StringType),</a>
+<a class="sourceLine" id="cb1-7" title="7">      <span class="fu">InputField</span>(<span class="st">&quot;value&quot;</span>, StringType)</a>
+<a class="sourceLine" id="cb1-8" title="8">    )</a>
+<a class="sourceLine" id="cb1-9" title="9">  ))</a></code></pre></div>
+<p>This manual control is sometimes useful as it allows you to add metadata like descriptions of the fields. However, we found that in most instances our input types were sufficiently simple that we would prefer to scrap the boilerplate and use an API that’s more like:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb2-1" title="1"><span class="kw">val</span> inputType = deriveInputType[List[KeyValue]]</a></code></pre></div>
+<p>The fact that the Sangria code is basically a manual transcription of the type we want it to represent would suggest that this should be possible. Can we do it?!</p>
+<h2 id="a-first-attempt">A first attempt</h2>
+<p>If our domain type representing our input is A then the value we want to derive has a type that looks very like InputType[A] so our first attempt might look something like this:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb3-1" title="1"><span class="kw">sealed</span> <span class="kw">trait</span> ToInputType[A] {</a>
+<a class="sourceLine" id="cb3-2" title="2"></a>
+<a class="sourceLine" id="cb3-3" title="3">  <span class="kw">def</span> to: InputType[A]</a>
+<a class="sourceLine" id="cb3-4" title="4"></a>
+<a class="sourceLine" id="cb3-5" title="5">}</a></code></pre></div>
+<p>This was, in fact, the first encoding I attempted but it has a couple of problems. If we examine the Sangria types more closely we find:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb4-1" title="1"></a>
+<a class="sourceLine" id="cb4-2" title="2"><span class="kw">val</span> StringType: InputType[String @@ CoercedScalaResult] <span class="co">//via some indirection</span></a>
+<a class="sourceLine" id="cb4-3" title="3"></a>
+<a class="sourceLine" id="cb4-4" title="4"><span class="kw">case</span> <span class="kw">class</span> ListInputType[T](ofType: InputType[T]) <span class="kw">extends</span> InputType[Seq[T]]</a></code></pre></div>
+<p>Our encoding has failed to capture the @@ CoercedScalaResult annotation on Strings (which it turns out breaks things!) and would force us to use raw Seq instead of List for our domain classes. It would appear that our derived InputType is actually parameterised not on A but on a type that is a function of A (a dependent type)!</p>
+<h2 id="dependent-types-to-the-rescue">Dependent types to the rescue!</h2>
+<p>Instead we try the following encoding (with some basic instances but with the definition of LowestPriorityInstances intentionally omitted for the moment):</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb5-1" title="1"><span class="kw">sealed</span> <span class="kw">trait</span> ToInputType[A] {</a>
+<a class="sourceLine" id="cb5-2" title="2">  <span class="kw">type</span> Repr</a>
+<a class="sourceLine" id="cb5-3" title="3">  <span class="kw">def</span> to: InputType[Repr]</a>
+<a class="sourceLine" id="cb5-4" title="4">}</a>
+<a class="sourceLine" id="cb5-5" title="5"></a>
+<a class="sourceLine" id="cb5-6" title="6"><span class="kw">object</span> ToInputType <span class="kw">extends</span> LowPriorityInstances <span class="kw">with</span> LowestPriorityInstances {</a>
+<a class="sourceLine" id="cb5-7" title="7"></a>
+<a class="sourceLine" id="cb5-8" title="8">  <span class="kw">type</span> Aux[A, R] = ToInputType[A] {<span class="kw">type</span> Repr = R}</a>
+<a class="sourceLine" id="cb5-9" title="9">  </a>
+<a class="sourceLine" id="cb5-10" title="10">  <span class="kw">implicit</span> <span class="kw">val</span> stringToInputType: ToInputType.<span class="fu">Aux</span>[String, String @@ CoercedScalaResult] =</a>
+<a class="sourceLine" id="cb5-11" title="11">    <span class="kw">new</span> ToInputType[String] {</a>
+<a class="sourceLine" id="cb5-12" title="12">      <span class="kw">override</span> <span class="kw">type</span> Repr = String @@ CoercedScalaResult</a>
+<a class="sourceLine" id="cb5-13" title="13">      <span class="kw">override</span> <span class="kw">def</span> to: InputType[Repr] = StringType</a>
+<a class="sourceLine" id="cb5-14" title="14">    }</a>
+<a class="sourceLine" id="cb5-15" title="15">  </a>
+<a class="sourceLine" id="cb5-16" title="16">  <span class="kw">implicit</span> <span class="kw">def</span> optionToInputType[A, R](<span class="kw">implicit</span> toInput: ToInputType.<span class="fu">Aux</span>[A, R]):</a>
+<a class="sourceLine" id="cb5-17" title="17">    ToInputType.<span class="fu">Aux</span>[Option[A], Option[R]] =</a>
+<a class="sourceLine" id="cb5-18" title="18">    <span class="kw">new</span> ToInputType[Option[A]] {</a>
+<a class="sourceLine" id="cb5-19" title="19">      <span class="kw">override</span> <span class="kw">type</span> Repr = Option[R]</a>
+<a class="sourceLine" id="cb5-20" title="20">      <span class="kw">override</span> <span class="kw">def</span> to: InputType[Repr] = <span class="fu">OptionInputType</span>(toInput.<span class="fu">to</span>)</a>
+<a class="sourceLine" id="cb5-21" title="21">    }</a>
+<a class="sourceLine" id="cb5-22" title="22"></a>
+<a class="sourceLine" id="cb5-23" title="23"></a>
+<a class="sourceLine" id="cb5-24" title="24">  <span class="kw">implicit</span> <span class="kw">def</span> listToInputType[A, R](<span class="kw">implicit</span> toInput: ToInputType.<span class="fu">Aux</span>[A, R]):</a>
+<a class="sourceLine" id="cb5-25" title="25">    ToInputType.<span class="fu">Aux</span>[List[A], Seq[R]] =</a>
+<a class="sourceLine" id="cb5-26" title="26">    <span class="kw">new</span> ToInputType[List[A]] {</a>
+<a class="sourceLine" id="cb5-27" title="27">      <span class="kw">override</span> <span class="kw">type</span> Repr = Seq[R]</a>
+<a class="sourceLine" id="cb5-28" title="28">      <span class="kw">override</span> <span class="kw">def</span> to: InputType[Repr] = <span class="fu">ListInputType</span>(toInput.<span class="fu">to</span>)</a>
+<a class="sourceLine" id="cb5-29" title="29">    }</a>
+<a class="sourceLine" id="cb5-30" title="30">}</a>
+<a class="sourceLine" id="cb5-31" title="31"></a>
+<a class="sourceLine" id="cb5-32" title="32"><span class="kw">trait</span> LowPriorityInstances {</a>
+<a class="sourceLine" id="cb5-33" title="33"></a>
+<a class="sourceLine" id="cb5-34" title="34">  <span class="kw">implicit</span> <span class="kw">def</span> seqToInputType[A, R](<span class="kw">implicit</span> toInput: ToInputType.<span class="fu">Aux</span>[A, R]):</a>
+<a class="sourceLine" id="cb5-35" title="35">    ToInputType.<span class="fu">Aux</span>[Seq[A], Seq[R]] =</a>
+<a class="sourceLine" id="cb5-36" title="36">    <span class="kw">new</span> ToInputType[Seq[A]] {</a>
+<a class="sourceLine" id="cb5-37" title="37">      <span class="kw">override</span> <span class="kw">type</span> Repr = Seq[toInput.<span class="fu">Repr</span>]</a>
+<a class="sourceLine" id="cb5-38" title="38">      <span class="kw">override</span> <span class="kw">def</span> to: InputType[Repr] = <span class="fu">ListInputType</span>(toInput.<span class="fu">to</span>)</a>
+<a class="sourceLine" id="cb5-39" title="39">    }</a>
+<a class="sourceLine" id="cb5-40" title="40">}</a></code></pre></div>
+<p>As you can see, we can provide instances for basic types directly and can recursively resolve them for <code>Option</code> , <code>List</code> , etc</p>
+<p>But what do we do about composite domain classes? For that (see our motivating example), we need to derive a List[InputField[_]]. Let’s try defining a typeclass to produce such a value and then see what we can do with it:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb6-1" title="1"><span class="kw">trait</span> ToFieldList[A] {</a>
+<a class="sourceLine" id="cb6-2" title="2"></a>
+<a class="sourceLine" id="cb6-3" title="3">  <span class="kw">def</span> to: List[InputField[_]]</a>
+<a class="sourceLine" id="cb6-4" title="4"></a>
+<a class="sourceLine" id="cb6-5" title="5">}</a></code></pre></div>
+<p>We now need to get a list of fields from our domain class and turn them into a list of <code>InputField[_]</code>. We can use Shapeless for that!</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb7-1" title="1"></a>
+<a class="sourceLine" id="cb7-2" title="2"><span class="kw">trait</span> LowestPriorityInstances {</a>
+<a class="sourceLine" id="cb7-3" title="3"></a>
+<a class="sourceLine" id="cb7-4" title="4">  <span class="kw">implicit</span> <span class="kw">def</span> toInputTypeViaGeneric[A, Repr](</a>
+<a class="sourceLine" id="cb7-5" title="5">    <span class="kw">implicit</span> gen: LabelledGeneric.<span class="fu">Aux</span>[A, Repr],</a>
+<a class="sourceLine" id="cb7-6" title="6">    toFieldList: Lazy[ToFieldList[Repr]],</a>
+<a class="sourceLine" id="cb7-7" title="7">    tag: ClassTag[A]): ToInputType.<span class="fu">Aux</span>[A, A @@ InputObjectResult] =</a>
+<a class="sourceLine" id="cb7-8" title="8">  <span class="kw">new</span> ToInputType[A] {</a>
+<a class="sourceLine" id="cb7-9" title="9">    <span class="kw">override</span> <span class="kw">type</span> Repr = A @@ InputObjectResult</a>
+<a class="sourceLine" id="cb7-10" title="10"></a>
+<a class="sourceLine" id="cb7-11" title="11">    <span class="kw">override</span> <span class="kw">def</span> to: InputType[Repr] =</a>
+<a class="sourceLine" id="cb7-12" title="12">      InputObjectType[A](</a>
+<a class="sourceLine" id="cb7-13" title="13">        name = tag.<span class="fu">toString</span>.<span class="fu">split</span>(<span class="st">&quot;</span><span class="ch">\\</span><span class="st">.&quot;</span>).<span class="fu">last</span>,</a>
+<a class="sourceLine" id="cb7-14" title="14">        fields = toFieldList.<span class="fu">value</span>.<span class="fu">to</span></a>
+<a class="sourceLine" id="cb7-15" title="15">      )</a>
+<a class="sourceLine" id="cb7-16" title="16"></a>
+<a class="sourceLine" id="cb7-17" title="17">  }</a>
+<a class="sourceLine" id="cb7-18" title="18"></a>
+<a class="sourceLine" id="cb7-19" title="19">}</a></code></pre></div>
+<p>This slightly scary piece of code uses Shapeless’s Generic to obtain a representation of our domain class as an HList (heterogeneous list) of the field types. The Labelled bit means that we can extract the names of the fields and the Lazy helps to stop the Scala compiler giving up prematurely when recursively resolving implicits. If you want to know more about Shapeless, I highly recommend <a href="https://underscore.io/books/shapeless-guide/">this book</a> from our friends at Underscore!</p>
+<p>Note that here we have mutually recursive typeclass resolution between <code>ToInputType</code> and <code>ToFieldList</code> 🙀</p>
+<p>All that remains is to derive an instance of <code>ToFieldList</code> for an arbitrary HList and we should be done with our typeclass resolution!</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb8-1" title="1"><span class="kw">object</span> ToFieldList {</a>
+<a class="sourceLine" id="cb8-2" title="2"></a>
+<a class="sourceLine" id="cb8-3" title="3">  <span class="kw">implicit</span> <span class="kw">val</span> hnilToFieldList: ToFieldList[HNil] = <span class="kw">new</span> ToFieldList[HNil] {</a>
+<a class="sourceLine" id="cb8-4" title="4">    <span class="kw">override</span> <span class="kw">def</span> to: List[InputField[_]] = Nil</a>
+<a class="sourceLine" id="cb8-5" title="5">  }</a>
+<a class="sourceLine" id="cb8-6" title="6"></a>
+<a class="sourceLine" id="cb8-7" title="7">  <span class="kw">implicit</span> <span class="kw">def</span> hlistToFieldList[K &lt;: Symbol, R, H, T &lt;: HList](</a>
+<a class="sourceLine" id="cb8-8" title="8">    <span class="kw">implicit</span> witness: Witness.<span class="fu">Aux</span>[K],</a>
+<a class="sourceLine" id="cb8-9" title="9">    headToInput: Lazy[ToInputType.<span class="fu">Aux</span>[H, R]],</a>
+<a class="sourceLine" id="cb8-10" title="10">    tailToFieldList: ToFieldList[T]</a>
+<a class="sourceLine" id="cb8-11" title="11">  ): ToFieldList[FieldType[K, H] :: T] = <span class="kw">new</span> ToFieldList[FieldType[K, H] :: T] {</a>
+<a class="sourceLine" id="cb8-12" title="12">    <span class="kw">override</span> <span class="kw">def</span> to: List[InputField[_]] =</a>
+<a class="sourceLine" id="cb8-13" title="13">      <span class="fu">InputField</span>(witness.<span class="fu">value</span>.<span class="fu">name</span>, headToInput.<span class="fu">value</span>.<span class="fu">to</span>) :: tailToFieldList.<span class="fu">to</span></a>
+<a class="sourceLine" id="cb8-14" title="14">  }</a>
+<a class="sourceLine" id="cb8-15" title="15"></a>
+<a class="sourceLine" id="cb8-16" title="16">}</a></code></pre></div>
+<p>Lastly, we need a function to summon the appropriate instance:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb9-1" title="1"><span class="kw">package</span> <span class="kw">object</span> derivation {</a>
+<a class="sourceLine" id="cb9-2" title="2"></a>
+<a class="sourceLine" id="cb9-3" title="3">  <span class="kw">def</span> deriveInputType[A](<span class="kw">implicit</span> toInput: ToInputType[A]): InputType[toInput.<span class="fu">Repr</span>] =</a>
+<a class="sourceLine" id="cb9-4" title="4">    toInput.<span class="fu">to</span></a>
+<a class="sourceLine" id="cb9-5" title="5"></a>
+<a class="sourceLine" id="cb9-6" title="6">}</a></code></pre></div>
+<p>And there you go, we can call the following, as promised!</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb10-1" title="1"><span class="kw">val</span> inputType = deriveInputType[List[KeyValue]]</a></code></pre></div>
+<p><a href="https://gist.github.com/TimWSpence/57f02cb06aa6a193e9485794aa06ee92">Here</a> is a gist if you want to see all of the code at once.</p>
+    </section>
+</article>
+
+        </main>
+
+        <footer>
+            Site proudly generated by
+            <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+        </footer>
+    </body>
+</html>

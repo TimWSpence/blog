@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>My Hakyll Blog - Towards a better API for I/O</title>
+        <link rel="stylesheet" href="../css/default.css" />
+    </head>
+    <body>
+        <header>
+            <div class="logo">
+                <a href="../">My Hakyll Blog</a>
+            </div>
+            <nav>
+                <a href="../">Home</a>
+                <a href="../about.html">About</a>
+                <a href="../contact.html">Contact</a>
+                <a href="../archive.html">Archive</a>
+            </nav>
+        </header>
+
+        <main role="main">
+            <h1>Towards a better API for I/O</h1>
+            <article>
+    <section class="header">
+        Posted on February 19, 2019
+        
+    </section>
+    <section>
+        <p>The core premise of Iteratees (and their various derivatives such as <a href="https://fs2.io/">fs2</a> in scala and <a href="http://hrckage.haskell.org/package/pipes">pipes</a> and <a href="http://hackage.haskell.org/package/conduit">conduit</a> in haskell) is that there are 3 properties you should seek in an I/O API:</p>
+<ul>
+<li>incrementality (supports streaming/incrementally reading from file descriptors, etc)</li>
+<li>resource safety (resources should be released in a prompt and deterministic manner)</li>
+<li>compositionality</li>
+</ul>
+<p>Hopefully the first two properties are fairly self-explanatory. Compositionality requires some elaboration however.</p>
+<p>Consider for example a function to take a file and return the number of ’x’s in the first 5 lines that are longer than 100 characters (don’t ask why you would want to do this):</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb1-1" title="1"><span class="kw">import</span> <span class="dt">System.IO</span></a>
+<a class="sourceLine" id="cb1-2" title="2"><span class="kw">import</span> <span class="dt">Control.Exception</span></a>
+<a class="sourceLine" id="cb1-3" title="3"></a>
+<a class="sourceLine" id="cb1-4" title="4"><span class="ot">processFile ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">Int</span></a>
+<a class="sourceLine" id="cb1-5" title="5">processFile path <span class="fu">=</span> bracket (openFile path <span class="dt">ReadMode</span>) (hClose) <span class="fu">$</span> \handle <span class="ot">-&gt;</span></a>
+<a class="sourceLine" id="cb1-6" title="6"> loop handle <span class="dv">0</span> <span class="dv">0</span></a>
+<a class="sourceLine" id="cb1-7" title="7"> <span class="kw">where</span></a>
+<a class="sourceLine" id="cb1-8" title="8"><span class="ot">   loop ::</span> <span class="dt">Handle</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">Int</span></a>
+<a class="sourceLine" id="cb1-9" title="9">   loop h count lineCount <span class="fu">=</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb1-10" title="10">     eof <span class="ot">&lt;-</span> hIsEOF h</a>
+<a class="sourceLine" id="cb1-11" title="11">     <span class="kw">if</span> eof <span class="fu">||</span> (lineCount <span class="fu">==</span> <span class="dv">5</span>) <span class="kw">then</span> <span class="fu">return</span> count <span class="kw">else</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb1-12" title="12">       next <span class="ot">&lt;-</span> hGetLine h</a>
+<a class="sourceLine" id="cb1-13" title="13">       <span class="kw">if</span> <span class="fu">length</span> next <span class="fu">&lt;</span> <span class="dv">100</span> <span class="kw">then</span>  loop h count lineCount <span class="kw">else</span> loop h (count <span class="fu">+</span> (<span class="fu">length</span> <span class="fu">.</span> <span class="fu">filter</span> (<span class="fu">==</span> <span class="ch">'x'</span>) <span class="fu">$</span>  next)) (lineCount <span class="fu">+</span> <span class="dv">1</span>)</a></code></pre></div>
+<p>Now suppose we wanted to instead return the number of ‘x’s in the first 3 lines that contain a ’y’. There is no way to re-use the previous code because our own application logic is tightly entangled with the I/O handling - handle based I/O does not compose!</p>
+<p>Oleg Kiselyov’s <a href="http://okmij.org/ftp/Haskell/Iteratee/describe.pdf">original paper on iteratees</a> presents a particularly concise and instructive implementation of such an I/O API.</p>
+<p>In this post we’ll skip over some of the more complex implementation details and focus more on the core design of iteratees and the reasoning behind the types Oleg defines.</p>
+<h3 id="a-digression-on-folds">A digression on folds</h3>
+<p>The Haskell prelude defines a fold (let’s ignore <code>Foldable</code> for the moment):</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb2-1" title="1"><span class="fu">foldl</span><span class="ot"> ::</span> (a <span class="ot">-&gt;</span> b <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> [b] <span class="ot">-&gt;</span> a</a></code></pre></div>
+<p>which processes a list from left to right, using a supplied function and initial value, by passing the output of one invocation of the function as input to the next.</p>
+<p>If we take off our glasses and squint hard enough, this looks a bit like what we want - the source of the data (the list) is de-coupled from the computation (the supplied folding function) we want to perform on it.</p>
+<p>In fact, we can define a fold on a file as well (simplistic implementation for text files):</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb3-1" title="1"><span class="ot">foldFile ::</span> (a <span class="ot">-&gt;</span> <span class="dt">Char</span> <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> a</a>
+<a class="sourceLine" id="cb3-2" title="2">foldFile f <span class="fu">init</span> path <span class="fu">=</span> bracket (openFile path <span class="dt">ReadMode</span>) (hClose) <span class="fu">$</span> \handle <span class="ot">-&gt;</span></a>
+<a class="sourceLine" id="cb3-3" title="3">  loop handle <span class="fu">init</span></a>
+<a class="sourceLine" id="cb3-4" title="4">  <span class="kw">where</span></a>
+<a class="sourceLine" id="cb3-5" title="5">    loop h acc <span class="fu">=</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb3-6" title="6">      eof <span class="ot">&lt;-</span> hIsEOF h</a>
+<a class="sourceLine" id="cb3-7" title="7">      <span class="kw">if</span> eof <span class="kw">then</span> <span class="fu">return</span> acc <span class="kw">else</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb3-8" title="8">        next <span class="ot">&lt;-</span> hGetChar h</a>
+<a class="sourceLine" id="cb3-9" title="9">        loop h (f acc next)</a></code></pre></div>
+<p>Now we’re really getting somewhere! Now we can (to a certain extent) compose functions which we want to apply to a source of data and maintain resource safety through the definiteion of fold.</p>
+<p>We can view the folding function as a state machine for stream processing and <code>fold</code> as a resource manager which drives the processor. However, there are some limitations to this API:</p>
+<ul>
+<li>the folding function cannot indicate to the fold that it is finished processing the data eg in the “take the first 3 lines of a file” example, the computation can finish and the file descriptor be closed after the first 3 lines are read</li>
+<li>a corollary of the above is that we cannot concatenate stream processors as each of them must consume the whole stream</li>
+<li>there is no encapsulation of the state of the stream processor</li>
+</ul>
+<h3 id="back-to-iteratees">Back to Iteratees</h3>
+<p>We are now (finally!) in a position to define the basics of iteratees:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb4-1" title="1"><span class="kw">data</span> <span class="dt">Stream</span> a <span class="fu">=</span> <span class="dt">EOF</span> <span class="fu">|</span> <span class="dt">Chunks</span> [a]</a>
+<a class="sourceLine" id="cb4-2" title="2"></a>
+<a class="sourceLine" id="cb4-3" title="3"><span class="kw">data</span> <span class="dt">Iteratee</span> i m o <span class="fu">=</span> <span class="dt">Done</span> o</a>
+<a class="sourceLine" id="cb4-4" title="4">                   <span class="fu">|</span> <span class="dt">Cont</span> (<span class="dt">Maybe</span> <span class="dt">Exception</span>) (<span class="dt">Stream</span> i <span class="ot">-&gt;</span> m (<span class="dt">Iteratee</span> i m o, <span class="dt">Stream</span> i))</a>
+<a class="sourceLine" id="cb4-5" title="5"></a>
+<a class="sourceLine" id="cb4-6" title="6"><span class="kw">instance</span> <span class="dt">Monad</span> m <span class="ot">=&gt;</span> <span class="dt">Monad</span> (<span class="dt">Iteratee</span> i m) <span class="kw">where</span></a>
+<a class="sourceLine" id="cb4-7" title="7"> <span class="fu">return</span> <span class="fu">=</span> <span class="dt">Done</span></a>
+<a class="sourceLine" id="cb4-8" title="8"></a>
+<a class="sourceLine" id="cb4-9" title="9"> it <span class="fu">&gt;&gt;=</span> f <span class="fu">=</span> <span class="kw">case</span> it <span class="kw">of</span></a>
+<a class="sourceLine" id="cb4-10" title="10">   <span class="dt">Done</span> v <span class="ot">-&gt;</span> f v</a>
+<a class="sourceLine" id="cb4-11" title="11">   <span class="dt">Cont</span> e k <span class="ot">-&gt;</span> <span class="dt">Cont</span> e (\str <span class="ot">-&gt;</span> k str <span class="fu">&gt;&gt;=</span> \(it', str') <span class="ot">-&gt;</span> <span class="fu">return</span> (it' <span class="fu">&gt;&gt;=</span> f, str'))</a>
+<a class="sourceLine" id="cb4-12" title="12"></a>
+<a class="sourceLine" id="cb4-13" title="13"><span class="kw">instance</span> <span class="dt">MonadTrans</span> (<span class="dt">Iteratee</span> i) <span class="kw">where</span></a>
+<a class="sourceLine" id="cb4-14" title="14"> lift ma <span class="fu">=</span> <span class="dt">Cont</span> <span class="dt">Nothing</span> (\str <span class="ot">-&gt;</span> ma <span class="fu">&gt;&gt;=</span> \a <span class="ot">-&gt;</span> <span class="fu">return</span> (<span class="dt">Done</span> a, <span class="dt">Chunks</span> []))</a>
+<a class="sourceLine" id="cb4-15" title="15"></a>
+<a class="sourceLine" id="cb4-16" title="16"><span class="kw">instance</span> <span class="dt">MonadIO</span> m <span class="ot">=&gt;</span> <span class="dt">MonadIO</span> (<span class="dt">Iteratee</span> i m) <span class="kw">where</span></a>
+<a class="sourceLine" id="cb4-17" title="17"> liftIO <span class="fu">=</span> lift <span class="fu">.</span> liftIO</a></code></pre></div>
+<p>Erm, what?</p>
+<p>Don’t panic! Firstly we’ve defined a stream type (<code>Stream a</code>) which can either be finished or contain a list of data of type a. We’ve also defined Iteratee i m o (like our folding function above), which represents a stream processor which takes a stream of type i and produces a value of type o, whilst performing effects of type <code>m</code> (<code>m</code> is probably <code>IO</code> if you are writing to a file or socket or similar). The iteratee can also return an exception to indicate an error (or as control flow) to its driver e.g. to request to rewind the stream, if that’s possible. You can think if it as a state machine - it has no ability to obtain data from anywhere, it is merely a representation of a computation.</p>
+<p>The <code>Monad{,Trans,IO}</code> instances are included for interest and because they turn out to be very useful. For example, here’s a stream processor which counts the number of elements in a stream:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb5-1" title="1"><span class="ot">count ::</span> <span class="dt">Monad</span> m <span class="ot">=&gt;</span> <span class="dt">Iteratee</span> i m <span class="dt">Int</span></a>
+<a class="sourceLine" id="cb5-2" title="2">count <span class="fu">=</span> <span class="dt">Cont</span> <span class="dt">Nothing</span> (k <span class="dv">0</span>) <span class="kw">where</span></a>
+<a class="sourceLine" id="cb5-3" title="3">  k n s<span class="fu">@</span>(<span class="dt">EOF</span> _) <span class="fu">=</span> <span class="fu">return</span> (<span class="dt">Done</span> n, s)</a>
+<a class="sourceLine" id="cb5-4" title="4">  k n (<span class="dt">Chunk</span> els) <span class="fu">=</span> <span class="fu">return</span> (<span class="dt">Cont</span> <span class="dt">Nothing</span> (k (n <span class="fu">+</span> <span class="fu">length</span> els)), <span class="dt">Chunk</span> [])</a></code></pre></div>
+<p>Don’t worry too much about the details - writing the internals of an iteratee library can get a bit messy but the high-level API you can create is well worth it, I promise!</p>
+<p>Now that we have a way to define stream processors, we need stream producers - a way to drive input into the stream processors to advance their state machine (like <code>fold</code> in our original example):</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb6-1" title="1"><span class="kw">type</span> <span class="dt">Enumerator</span> i m o <span class="fu">=</span> <span class="dt">Iteratee</span> i m o <span class="ot">-&gt;</span> m (<span class="dt">Iteratee</span> i m o)</a>
+<a class="sourceLine" id="cb6-2" title="2"></a>
+<a class="sourceLine" id="cb6-3" title="3"><span class="co">-- concatenate inputs using Kleisli composition</span></a>
+<a class="sourceLine" id="cb6-4" title="4"><span class="ot">(&gt;&gt;&gt;) ::</span> <span class="dt">Monad</span> m <span class="ot">=&gt;</span> <span class="dt">Enumerator</span> i m o <span class="ot">-&gt;</span> <span class="dt">Enumerator</span> i m o <span class="ot">-&gt;</span> <span class="dt">Enumerator</span> i m o</a>
+<a class="sourceLine" id="cb6-5" title="5">e1 <span class="fu">&gt;&gt;&gt;</span> e2 <span class="fu">=</span> e1 <span class="fu">&gt;=&gt;</span> e2</a></code></pre></div>
+<p>Why is this the type of a stream producer? An enumerator must take in a stream processor (<code>Iteratee i m o</code>) describing the computation to perform. The value returned from the enumerator should be the final state of the computation (iteratee), wrapped in some context m (probably IO) as the enumerator will have to perform some action to obtain the input. In other words <code>Iteratee i m o -&gt; m (Iteratee i m o)</code>!</p>
+<p>The enumerator will probably consist of some sort of loop, performing I/O to obtain data and folding that with the current state of the iteratee. For example, we can define an enumerator for text files:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb7-1" title="1"><span class="ot">enumFileChars ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">Enumerator</span> <span class="dt">Char</span> <span class="dt">IO</span> o</a>
+<a class="sourceLine" id="cb7-2" title="2">enumFileChars path iter <span class="fu">=</span> bracket (openFile path <span class="dt">ReadMode</span>) (hClose) <span class="fu">$</span> \handle <span class="ot">-&gt;</span></a>
+<a class="sourceLine" id="cb7-3" title="3">  loop handle [] iter</a>
+<a class="sourceLine" id="cb7-4" title="4">  <span class="kw">where</span></a>
+<a class="sourceLine" id="cb7-5" title="5">    loop h _ _ it<span class="fu">@</span>(<span class="dt">Done</span> _) <span class="fu">=</span> <span class="fu">return</span> it <span class="co">-- stop if interatee is finished</span></a>
+<a class="sourceLine" id="cb7-6" title="6">    loop h _ _ it<span class="fu">@</span>(<span class="dt">Cont</span> (<span class="dt">Just</span> e) _) <span class="fu">=</span> <span class="fu">return</span> it <span class="co">-- stop if iteratee signals error</span></a>
+<a class="sourceLine" id="cb7-7" title="7">    loop h s (<span class="dt">Cont</span> _ k) <span class="fu">=</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb7-8" title="8">      eof <span class="ot">&lt;-</span> hIsEOF h</a>
+<a class="sourceLine" id="cb7-9" title="9">      <span class="kw">if</span> eof <span class="kw">then</span> <span class="fu">return</span> it <span class="kw">else</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb7-10" title="10">        chunk <span class="ot">&lt;-</span> <span class="dt">Chunk</span> <span class="fu">.</span> (s<span class="fu">++</span>) <span class="fu">&lt;$&gt;</span> hGetLine h</a>
+<a class="sourceLine" id="cb7-11" title="11">        (it', str) <span class="ot">&lt;-</span> k chunk</a>
+<a class="sourceLine" id="cb7-12" title="12">        loop h str it'</a></code></pre></div>
+<p>We’ve achieved quite a lot already but there’s one more type we need for general stream processing. Iteratee can only represent terminal operations which produce a value. We also need stream transducers to create derived streams so that we can represent concepts such as filtering or mapping streams or codecs:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb8-1" title="1"><span class="kw">type</span> <span class="dt">Enumeratee</span> outer inner m a <span class="fu">=</span> <span class="dt">Iteratee</span> inner m a <span class="ot">-&gt;</span> <span class="dt">Iteratee</span> outer m (<span class="dt">Iteratee</span> inner m a)</a></code></pre></div>
+<p>Again, why is this what we want? A stream transducer should take an Iteratee inner m a describing the downstream computation that is to be performed. It should use this to create a new Iteratee that consumes a stream of outer , transforms it to a stream of inner, passes that to the inner Iteratee and returns the final state of the inner Iteratee as its result. In other words <code>Iteratee inner m a -&gt; Iteratee outer m (Iteratee inner m a)</code>!</p>
+<p>Note that this means thatEnumeratee is effectively an Iteratee and an Enumerator at the same time. For example, here is filter for streams:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb9-1" title="1"><span class="fu">filter</span><span class="ot"> ::</span> <span class="dt">Monad</span> m <span class="ot">=&gt;</span> (i <span class="ot">-&gt;</span> <span class="dt">Bool</span>) <span class="ot">-&gt;</span> <span class="dt">Enumeratee</span> i i m a</a>
+<a class="sourceLine" id="cb9-2" title="2"><span class="fu">filter</span> <span class="fu">pred</span> i<span class="fu">@</span>(<span class="dt">Cont</span> <span class="dt">Nothing</span> k) <span class="fu">=</span> <span class="dt">Cont</span> <span class="dt">Nothing</span> (f i) <span class="kw">where</span></a>
+<a class="sourceLine" id="cb9-3" title="3">  f iter<span class="fu">@</span>(<span class="dt">Cont</span> <span class="dt">Nothing</span> k) s<span class="fu">@</span>(<span class="dt">Chunk</span> l) <span class="fu">=</span> k (<span class="dt">Chunk</span> <span class="fu">$</span> <span class="fu">filter</span> <span class="fu">pred</span> l) <span class="fu">&gt;&gt;=</span> \(i, stream) <span class="ot">-&gt;</span> <span class="fu">return</span> (<span class="dt">Cont</span> <span class="dt">Nothing</span> (f i), stream)</a>
+<a class="sourceLine" id="cb9-4" title="4">  f iter s <span class="fu">=</span> <span class="fu">return</span> (<span class="dt">Done</span> iter, s)</a>
+<a class="sourceLine" id="cb9-5" title="5"><span class="fu">filter</span> <span class="fu">pred</span> i <span class="fu">=</span> <span class="fu">return</span> i</a></code></pre></div>
+<p>Again, don’t worry too much about the details - you won’t have to program at this level to use iteratees!</p>
+<p>Now we just need to define a couple of useful functions and we’re ready to try out our iteratees API!</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb10-1" title="1"><span class="co">-- often we just want the result of the inner iteratee when we have an enumeratee</span></a>
+<a class="sourceLine" id="cb10-2" title="2"><span class="ot">($=) ::</span> <span class="dt">Monad</span> m <span class="ot">=&gt;</span> <span class="dt">Enumeratee</span> o i m a <span class="ot">-&gt;</span> <span class="dt">Iteratee</span> i m a <span class="ot">-&gt;</span> <span class="dt">Iteratee</span> o m a</a>
+<a class="sourceLine" id="cb10-3" title="3">enum <span class="fu">$=</span> iter <span class="fu">=</span> (enum iter) <span class="fu">&gt;&gt;=</span> lift <span class="fu">.</span> run</a>
+<a class="sourceLine" id="cb10-4" title="4"><span class="kw">infixr</span> <span class="dv">4</span> <span class="fu">$=</span></a>
+<a class="sourceLine" id="cb10-5" title="5"></a>
+<a class="sourceLine" id="cb10-6" title="6"><span class="co">-- run the iteratee! We flush the state by passing in an EOF</span></a>
+<a class="sourceLine" id="cb10-7" title="7"><span class="co">-- it is considered an error if the iterator does not transition</span></a>
+<a class="sourceLine" id="cb10-8" title="8"><span class="co">-- to state Done</span></a>
+<a class="sourceLine" id="cb10-9" title="9"><span class="ot">run ::</span> <span class="dt">Monad</span> m <span class="ot">=&gt;</span> <span class="dt">Iteratee</span> i m o <span class="ot">-&gt;</span> m o</a>
+<a class="sourceLine" id="cb10-10" title="10">run (<span class="dt">Done</span> o) <span class="fu">=</span> <span class="fu">return</span> o</a>
+<a class="sourceLine" id="cb10-11" title="11">run (<span class="dt">Cont</span> <span class="dt">Nothing</span> k) <span class="fu">=</span> <span class="fu">fst</span> <span class="fu">&lt;$&gt;</span> k (<span class="dt">EOF</span> <span class="dt">Nothing</span>) <span class="fu">&gt;&gt;=</span> check <span class="kw">where</span></a>
+<a class="sourceLine" id="cb10-12" title="12">  check (<span class="dt">Done</span> o) <span class="fu">=</span> <span class="fu">return</span> o</a>
+<a class="sourceLine" id="cb10-13" title="13">  check (<span class="dt">Cont</span> _ _) <span class="fu">=</span> <span class="fu">error</span> <span class="st">&quot;Diverging iteratee&quot;</span></a>
+<a class="sourceLine" id="cb10-14" title="14">run _ <span class="fu">=</span> <span class="fu">error</span> <span class="st">&quot;Diverging iteratee&quot;</span></a></code></pre></div>
+<p>Now our original example of counting the ‘x’s in a file under various conditions would look something like this (definitions for most of the functions omitted - the high level API is what concerns us here):</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb11-1" title="1"><span class="ot">enumLines ::</span> <span class="dt">Enumeratee</span> [<span class="dt">String</span>] m o</a>
+<a class="sourceLine" id="cb11-2" title="2"><span class="fu">take</span><span class="ot"> ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Enumeratee</span> a a m o</a>
+<a class="sourceLine" id="cb11-3" title="3"><span class="fu">filter</span><span class="ot"> ::</span> (a <span class="ot">-&gt;</span> <span class="dt">Bool</span>) <span class="ot">-&gt;</span> <span class="dt">Enumeratee</span> a a m o</a>
+<a class="sourceLine" id="cb11-4" title="4"><span class="fu">map</span><span class="ot"> ::</span> (a <span class="ot">-&gt;</span> b) <span class="ot">-&gt;</span> <span class="dt">Enumeratee</span> a b m o</a>
+<a class="sourceLine" id="cb11-5" title="5"><span class="fu">sum</span><span class="ot"> ::</span> <span class="dt">Num</span> a <span class="ot">=&gt;</span> <span class="dt">Iteratee</span> a m a</a>
+<a class="sourceLine" id="cb11-6" title="6"></a>
+<a class="sourceLine" id="cb11-7" title="7">run <span class="fu">$</span> enumLines <span class="st">&quot;/tmp/data&quot;</span> <span class="fu">$</span> <span class="fu">filter</span> (\l <span class="ot">-&gt;</span> <span class="fu">length</span> l <span class="fu">&gt;</span> <span class="dv">100</span>)</a>
+<a class="sourceLine" id="cb11-8" title="8">                            <span class="fu">$=</span> <span class="fu">take</span> <span class="dv">5</span> </a>
+<a class="sourceLine" id="cb11-9" title="9">                            <span class="fu">$=</span> <span class="fu">map</span> (<span class="fu">length</span> <span class="fu">.</span> <span class="fu">filter</span> (<span class="fu">==</span> <span class="ch">'x'</span>))</a>
+<a class="sourceLine" id="cb11-10" title="10">                            <span class="fu">$=</span> <span class="fu">sum</span></a>
+<a class="sourceLine" id="cb11-11" title="11"></a>
+<a class="sourceLine" id="cb11-12" title="12">run <span class="fu">$</span> enumLines <span class="st">&quot;/tmp/data&quot;</span> <span class="fu">$</span> <span class="fu">filter</span> (<span class="fu">elem</span> <span class="ch">'y'</span>)</a>
+<a class="sourceLine" id="cb11-13" title="13">                            <span class="fu">$=</span> <span class="fu">take</span> <span class="dv">3</span></a>
+<a class="sourceLine" id="cb11-14" title="14">                            <span class="fu">$=</span> <span class="fu">map</span> (<span class="fu">length</span> <span class="fu">.</span> <span class="fu">filter</span> (<span class="fu">==</span> <span class="ch">'x'</span>))</a>
+<a class="sourceLine" id="cb11-15" title="15">                            <span class="fu">$=</span> <span class="fu">sum</span></a></code></pre></div>
+<p>As you can see, we’ve split our computation into reusable, composable components :)</p>
+<p>Now that you’ve finished you should (hopefully!) be better equipped to go and read Oleg’s Kiselyov’s original paper and John Lato’s equally excellent article in The Monad Reader 16 to see a more detailed explanation and implementation. Moreover, you’re hopefully more motivated to use one of the libraries that implement these concepts next time you have to perform I/O in your programs!</p>
+<p>As you can see, we have split our computation into reusable, composable components :)</p>
+<p>Now that you’ve finished this, you should (hopefully!) be better equipped to go and read Oleg’s Kiselyov’s <a href="http://okmij.org/ftp/Haskell/Iteratee/describe.pdf">original paper</a> and John Lato’s equally excellent article in <a href="https://themonadreader.files.wordpress.com/2010/05/issue16.pdf">The Monad Reader 16</a></p>
+<h3 id="caveat-emptor">Caveat Emptor</h3>
+<p>The purpose of this article was to explain the high-level design of iteratees and their advantages over traditional handle-based I/O. The code is little tested and absolutely not production quality. Please use a well-established library like the ones listed above to write real code.</p>
+    </section>
+</article>
+
+        </main>
+
+        <footer>
+            Site proudly generated by
+            <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+        </footer>
+    </body>
+</html>
