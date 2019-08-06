@@ -11,6 +11,22 @@ main = hakyll $ do
         route   idRoute
         compile copyFileCompiler
 
+    -- Credit to https://github.com/sulami/sulami.github.io/blob/develop/site.hs
+    match "tufte/et-book/*/*" $ do
+        route $ customRoute $ drop 6 . toFilePath
+        compile copyFileCompiler
+
+    match "tufte/tufte.css" $ do
+        route   idRoute
+        compile compressCssCompiler
+
+    create ["stylesheet.css"] $ do
+        route idRoute
+        compile $ do
+            tufte <- load "tufte/tufte.css"
+            csses <- loadAll "css/*.css"
+            makeItem $ unlines $ map itemBody $ tufte : csses
+
     match "css/*" $ do
         route   idRoute
         compile compressCssCompiler
