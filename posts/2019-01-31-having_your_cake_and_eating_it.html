@@ -6,6 +6,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>My Hakyll Blog - Having your cake and eating it</title>
         <link rel="stylesheet" href="../css/default.css" />
+        <link rel="stylesheet" href="../css/syntax.css" />
     </head>
     <body>
         <header>
@@ -30,13 +31,12 @@
     <section>
         <p>At Permutive, we’re committed to functional programming. That typically means also committing to immutable data structures (a very good thing!), but there are times when an algorithm would run much faster or be more space efficient if it could update state in-place.</p>
 <p>Consider the very useful but much-maligned nub, which removes duplicates from a list:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb1-1" title="1"></a>
-<a class="sourceLine" id="cb1-2" title="2"><span class="ot">nub ::</span> (<span class="dt">Eq</span> a) <span class="ot">=&gt;</span> [a] <span class="ot">-&gt;</span> [a]</a>
-<a class="sourceLine" id="cb1-3" title="3">nub <span class="fu">=</span> nubBy (<span class="fu">==</span>)</a>
-<a class="sourceLine" id="cb1-4" title="4"></a>
-<a class="sourceLine" id="cb1-5" title="5"><span class="ot">nubBy ::</span> (a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">Bool</span>) <span class="ot">-&gt;</span> [a] <span class="ot">-&gt;</span> [a]</a>
-<a class="sourceLine" id="cb1-6" title="6">nubBy eq [] <span class="fu">=</span>  []</a>
-<a class="sourceLine" id="cb1-7" title="7">nubBy eq (x<span class="fu">:</span>xs) <span class="fu">=</span> x <span class="fu">:</span> nubBy eq (<span class="fu">filter</span> (\ y <span class="ot">-&gt;</span> <span class="fu">not</span> (eq x y)) xs)</a></code></pre></div>
+<div class="sourceCode" id="cb1"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb1-1" title="1"><span class="ot">nub ::</span> (<span class="dt">Eq</span> a) <span class="ot">=&gt;</span> [a] <span class="ot">-&gt;</span> [a]</a>
+<a class="sourceLine" id="cb1-2" title="2">nub <span class="fu">=</span> nubBy (<span class="fu">==</span>)</a>
+<a class="sourceLine" id="cb1-3" title="3"></a>
+<a class="sourceLine" id="cb1-4" title="4"><span class="ot">nubBy ::</span> (a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">Bool</span>) <span class="ot">-&gt;</span> [a] <span class="ot">-&gt;</span> [a]</a>
+<a class="sourceLine" id="cb1-5" title="5">nubBy eq [] <span class="fu">=</span>  []</a>
+<a class="sourceLine" id="cb1-6" title="6">nubBy eq (x<span class="fu">:</span>xs) <span class="fu">=</span> x <span class="fu">:</span> nubBy eq (<span class="fu">filter</span> (\ y <span class="ot">-&gt;</span> <span class="fu">not</span> (eq x y)) xs)</a></code></pre></div>
 <p>This has O(n^2) time complexity due to an inner traversal of the list. But if we’re willing to introduce an Ord a restriction, we can reduce this to O(nlog(n)) by building up a binary tree, giving us the <a href="http://hackage.haskell.org/package/extra-1.6.14/docs/Data-List-Extra.html">nubOrd</a> function in Data.List.Extra. Further, we could replace the Ord a restriction with Hashable a and implement nub in O(n) average time if we could construct a mutable hashmap.</p>
 <p>One way to achieve this mutable state would be to store our states inside an IORef, as this provides mutable memory protected by sequenced IO actions. It <em>would</em> run in constant space but <em>isn’t</em> completely satisfactory, since our types become polluted with IO. Clearly this shouldn’t be necessary: our nub function does not want to modify any non-local state.</p>
 <p>This reveals something about the nature of the problem. The reason we’re required to introduce IO is because the compiler has no way to guarantee that we won’t share our mutable array with another thread, and hence to ensure referential transparency we must work within the IO monad.</p>
@@ -45,11 +45,10 @@
 <p>(Many thanks to <a href="https://www.microsoft.com/en-us/research/wp-content/uploads/1994/06/lazy-functional-state-threads.pdf">John Launchbury and Simon Peyton Jones — Lazy Functional State Threads</a>)</p>
 <h2 id="the-st-monad">The ST Monad</h2>
 <p>Haskell defines types ST s a and STRef s a that support—amongst others—the following operations:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb2-1" title="1"></a>
-<a class="sourceLine" id="cb2-2" title="2"><span class="ot">newSTRef ::</span> a <span class="ot">-&gt;</span> <span class="dt">ST</span> s (<span class="dt">STRef</span> s a)</a>
-<a class="sourceLine" id="cb2-3" title="3"><span class="ot">readSTRef ::</span> <span class="dt">STRef</span> s a <span class="ot">-&gt;</span> <span class="dt">ST</span> s a</a>
-<a class="sourceLine" id="cb2-4" title="4"><span class="ot">writeSTRef ::</span> <span class="dt">STRef</span> s a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">ST</span> s ()</a>
-<a class="sourceLine" id="cb2-5" title="5"><span class="ot">modifySTRef ::</span> <span class="dt">STRef</span> s a <span class="ot">-&gt;</span> (a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> <span class="dt">ST</span> s ()</a></code></pre></div>
+<div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb2-1" title="1"><span class="ot">newSTRef ::</span> a <span class="ot">-&gt;</span> <span class="dt">ST</span> s (<span class="dt">STRef</span> s a)</a>
+<a class="sourceLine" id="cb2-2" title="2"><span class="ot">readSTRef ::</span> <span class="dt">STRef</span> s a <span class="ot">-&gt;</span> <span class="dt">ST</span> s a</a>
+<a class="sourceLine" id="cb2-3" title="3"><span class="ot">writeSTRef ::</span> <span class="dt">STRef</span> s a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">ST</span> s ()</a>
+<a class="sourceLine" id="cb2-4" title="4"><span class="ot">modifySTRef ::</span> <span class="dt">STRef</span> s a <span class="ot">-&gt;</span> (a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> <span class="dt">ST</span> s ()</a></code></pre></div>
 <p>Which means that we can write (pseudo-imperative) code, like:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb3-1" title="1"><span class="ot">increment ::</span> <span class="dt">STRef</span> s <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">ST</span> s ()</a>
 <a class="sourceLine" id="cb3-2" title="2">increment ref <span class="fu">=</span> <span class="kw">do</span></a>
@@ -80,9 +79,8 @@
 <div class="sourceCode" id="cb9"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb9-1" title="1">runST <span class="fu">$</span> newSTRef <span class="dv">0</span><span class="ot"> ::</span> <span class="dt">STRef</span> s <span class="dt">Int</span></a></code></pre></div>
 <p>But this contradicts the type of runST as the return type is dependent on s, whereas the return type of runST is independent of s</p>
 <p>Similarly we can show that the compiler will not allow us to pass in an STRef to be evaluated by runST:</p>
-<div class="sourceCode" id="cb10"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb10-1" title="1"></a>
-<a class="sourceLine" id="cb10-2" title="2"><span class="kw">let</span> v <span class="fu">=</span> runST (newVar <span class="dt">True</span>)</a>
-<a class="sourceLine" id="cb10-3" title="3">  <span class="kw">in</span> runST (readVar v)</a></code></pre></div>
+<div class="sourceCode" id="cb10"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb10-1" title="1"><span class="kw">let</span> v <span class="fu">=</span> runST (newVar <span class="dt">True</span>)</a>
+<a class="sourceLine" id="cb10-2" title="2">  <span class="kw">in</span> runST (readVar v)</a></code></pre></div>
 <p>If this were legal, v would have type ST s (STRef s Bool) and hence readVar v :: ST s Bool. Again, this does not match the type (forall s. ST s a) required by runST: s is free in the latter but not in the former.</p>
 <p><strong>TL;DR </strong>The phantom type s means the compiler will prohibit us from passing an STRef as a parameter to runST or returning an STRef via runST. Hence we can guarantee that the mutable state is never shared and so runST is safe, unlike unsafePerformIO! (For a more rigorous proof see <a href="https://www.microsoft.com/en-us/research/wp-content/uploads/1994/06/lazy-functional-state-threads.pdf">the original paper</a>)</p>
 <h2 id="back-to-nub">Back to nub</h2>

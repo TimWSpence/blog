@@ -6,6 +6,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>My Hakyll Blog - Fun with mutually-recursive typeclass resolution</title>
         <link rel="stylesheet" href="../css/default.css" />
+        <link rel="stylesheet" href="../css/syntax.css" />
     </head>
     <body>
         <header>
@@ -51,10 +52,9 @@
 <a class="sourceLine" id="cb3-4" title="4"></a>
 <a class="sourceLine" id="cb3-5" title="5">}</a></code></pre></div>
 <p>This was, in fact, the first encoding I attempted but it has a couple of problems. If we examine the Sangria types more closely we find:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb4-1" title="1"></a>
-<a class="sourceLine" id="cb4-2" title="2"><span class="kw">val</span> StringType: InputType[String @@ CoercedScalaResult] <span class="co">//via some indirection</span></a>
-<a class="sourceLine" id="cb4-3" title="3"></a>
-<a class="sourceLine" id="cb4-4" title="4"><span class="kw">case</span> <span class="kw">class</span> ListInputType[T](ofType: InputType[T]) <span class="kw">extends</span> InputType[Seq[T]]</a></code></pre></div>
+<div class="sourceCode" id="cb4"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb4-1" title="1"><span class="kw">val</span> StringType: InputType[String @@ CoercedScalaResult] <span class="co">//via some indirection</span></a>
+<a class="sourceLine" id="cb4-2" title="2"></a>
+<a class="sourceLine" id="cb4-3" title="3"><span class="kw">case</span> <span class="kw">class</span> ListInputType[T](ofType: InputType[T]) <span class="kw">extends</span> InputType[Seq[T]]</a></code></pre></div>
 <p>Our encoding has failed to capture the @@ CoercedScalaResult annotation on Strings (which it turns out breaks things!) and would force us to use raw Seq instead of List for our domain classes. It would appear that our derived InputType is actually parameterised not on A but on a type that is a function of A (a dependent type)!</p>
 <h2 id="dependent-types-to-the-rescue">Dependent types to the rescue!</h2>
 <p>Instead we try the following encoding (with some basic instances but with the definition of LowestPriorityInstances intentionally omitted for the moment):</p>
@@ -106,25 +106,24 @@
 <a class="sourceLine" id="cb6-4" title="4"></a>
 <a class="sourceLine" id="cb6-5" title="5">}</a></code></pre></div>
 <p>We now need to get a list of fields from our domain class and turn them into a list of <code>InputField[_]</code>. We can use Shapeless for that!</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb7-1" title="1"></a>
-<a class="sourceLine" id="cb7-2" title="2"><span class="kw">trait</span> LowestPriorityInstances {</a>
-<a class="sourceLine" id="cb7-3" title="3"></a>
-<a class="sourceLine" id="cb7-4" title="4">  <span class="kw">implicit</span> <span class="kw">def</span> toInputTypeViaGeneric[A, Repr](</a>
-<a class="sourceLine" id="cb7-5" title="5">    <span class="kw">implicit</span> gen: LabelledGeneric.<span class="fu">Aux</span>[A, Repr],</a>
-<a class="sourceLine" id="cb7-6" title="6">    toFieldList: Lazy[ToFieldList[Repr]],</a>
-<a class="sourceLine" id="cb7-7" title="7">    tag: ClassTag[A]): ToInputType.<span class="fu">Aux</span>[A, A @@ InputObjectResult] =</a>
-<a class="sourceLine" id="cb7-8" title="8">  <span class="kw">new</span> ToInputType[A] {</a>
-<a class="sourceLine" id="cb7-9" title="9">    <span class="kw">override</span> <span class="kw">type</span> Repr = A @@ InputObjectResult</a>
-<a class="sourceLine" id="cb7-10" title="10"></a>
-<a class="sourceLine" id="cb7-11" title="11">    <span class="kw">override</span> <span class="kw">def</span> to: InputType[Repr] =</a>
-<a class="sourceLine" id="cb7-12" title="12">      InputObjectType[A](</a>
-<a class="sourceLine" id="cb7-13" title="13">        name = tag.<span class="fu">toString</span>.<span class="fu">split</span>(<span class="st">&quot;</span><span class="ch">\\</span><span class="st">.&quot;</span>).<span class="fu">last</span>,</a>
-<a class="sourceLine" id="cb7-14" title="14">        fields = toFieldList.<span class="fu">value</span>.<span class="fu">to</span></a>
-<a class="sourceLine" id="cb7-15" title="15">      )</a>
-<a class="sourceLine" id="cb7-16" title="16"></a>
-<a class="sourceLine" id="cb7-17" title="17">  }</a>
-<a class="sourceLine" id="cb7-18" title="18"></a>
-<a class="sourceLine" id="cb7-19" title="19">}</a></code></pre></div>
+<div class="sourceCode" id="cb7"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb7-1" title="1"><span class="kw">trait</span> LowestPriorityInstances {</a>
+<a class="sourceLine" id="cb7-2" title="2"></a>
+<a class="sourceLine" id="cb7-3" title="3">  <span class="kw">implicit</span> <span class="kw">def</span> toInputTypeViaGeneric[A, Repr](</a>
+<a class="sourceLine" id="cb7-4" title="4">    <span class="kw">implicit</span> gen: LabelledGeneric.<span class="fu">Aux</span>[A, Repr],</a>
+<a class="sourceLine" id="cb7-5" title="5">    toFieldList: Lazy[ToFieldList[Repr]],</a>
+<a class="sourceLine" id="cb7-6" title="6">    tag: ClassTag[A]): ToInputType.<span class="fu">Aux</span>[A, A @@ InputObjectResult] =</a>
+<a class="sourceLine" id="cb7-7" title="7">  <span class="kw">new</span> ToInputType[A] {</a>
+<a class="sourceLine" id="cb7-8" title="8">    <span class="kw">override</span> <span class="kw">type</span> Repr = A @@ InputObjectResult</a>
+<a class="sourceLine" id="cb7-9" title="9"></a>
+<a class="sourceLine" id="cb7-10" title="10">    <span class="kw">override</span> <span class="kw">def</span> to: InputType[Repr] =</a>
+<a class="sourceLine" id="cb7-11" title="11">      InputObjectType[A](</a>
+<a class="sourceLine" id="cb7-12" title="12">        name = tag.<span class="fu">toString</span>.<span class="fu">split</span>(<span class="st">&quot;</span><span class="ch">\\</span><span class="st">.&quot;</span>).<span class="fu">last</span>,</a>
+<a class="sourceLine" id="cb7-13" title="13">        fields = toFieldList.<span class="fu">value</span>.<span class="fu">to</span></a>
+<a class="sourceLine" id="cb7-14" title="14">      )</a>
+<a class="sourceLine" id="cb7-15" title="15"></a>
+<a class="sourceLine" id="cb7-16" title="16">  }</a>
+<a class="sourceLine" id="cb7-17" title="17"></a>
+<a class="sourceLine" id="cb7-18" title="18">}</a></code></pre></div>
 <p>This slightly scary piece of code uses Shapeless’s Generic to obtain a representation of our domain class as an HList (heterogeneous list) of the field types. The Labelled bit means that we can extract the names of the fields and the Lazy helps to stop the Scala compiler giving up prematurely when recursively resolving implicits. If you want to know more about Shapeless, I highly recommend <a href="https://underscore.io/books/shapeless-guide/">this book</a> from our friends at Underscore!</p>
 <p>Note that here we have mutually recursive typeclass resolution between <code>ToInputType</code> and <code>ToFieldList</code> 🙀</p>
 <p>All that remains is to derive an instance of <code>ToFieldList</code> for an arbitrary HList and we should be done with our typeclass resolution!</p>
