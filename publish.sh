@@ -19,3 +19,7 @@ git commit -m "Publish site"
 git push origin gh-pages
 
 git checkout master
+
+pushd tufte
+git reset --hard HEAD
+popd
