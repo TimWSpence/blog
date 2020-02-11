@@ -16,14 +16,17 @@ programming (mutexes, semaphores, etc) do not compose. Given two functions `f: A
 behaviour of ?????????
 
 The solution to this is the `STM` monad. This is compositional by definition
-(indeed, this practically is the definition of a monad) and exposes combinators
+(indeed, this practically _is_ the definition of a monad) and exposes combinators
 such as
-
-TODO something about TVars here too
 
 `def map[A, B](s: STM[A], f: A => B): STM[B]`
 `def orElse[A](attempt: STM[A], fallback: STM[A]): STM[A]`
 `def check(check: => Boolean): STM[Unit]`
+
+How do we obtain a value of type `STM[A]` in the first place? These are returned by
+the operations defined on `TVar`s (transactional vars):
+`get: STM[A]`
+`set(a: A): STM[Unit]`
 
 A value of type `STM[A]` represents a computation that we would like to run
 transactionally and which should return a value of type `A`. How do we do that?
@@ -39,7 +42,42 @@ perform side effects and hence must be suspended in `IO`
 Here is a contrived example of what this looks like in practice:
 
 ```scala
+import cats.effect.{ExitCode, IO, IOApp}
+import io.github.timwspence.cats.stm.{TVar, STM}
 
+object Main extends IOApp {
+
+  override def run(args: List[String]): IO[ExitCode] = for {
+    accountForTim   <- TVar.of[Long](100).commit[IO]
+    accountForSteve <- TVar.of[Long](0).commit[IO]
+    _               <- printBalances(accountForTim, accountForSteve)
+    _               <- giveTimMoreMoney(accountForTim).start
+    _               <- transfer(accountForTim, accountForSteve)
+    _               <- printBalances(accountForTim, accountForSteve)
+  } yield ExitCode.Success
+
+  private def transfer(accountForTim: TVar[Long], accountForSteve: TVar[Long]): IO[Unit] = for {
+    _ <- STM.atomically[IO] {
+      for {
+        balance <- accountForTim.get
+        _       <- STM.check(balance > 100)
+        _       <- accountForTim.modify(_ - 100)
+        _       <- accountForSteve.modify(_ + 100)
+      } yield ()
+    }
+  } yield ()
+
+  private def giveTimMoreMoney(accountForTim: TVar[Long]): IO[Unit] = for {
+    _ <- IO(Thread.sleep(5000))
+    _ <- STM.atomically[IO](accountForTim.modify(_ + 1))
+  } yield ()
+
+  private def printBalances(accountForTim: TVar[Long], accountForSteve: TVar[Long]): IO[Unit] = for {
+    _ <- accountForTim.get.commit[IO].flatMap(b => IO(println(s"Tim: $b")))
+    _ <- accountForSteve.get.commit[IO].flatMap(b => IO(println(s"Tim: $b")))
+  } yield ()
+
+}
 ```
 
 For a more involved example, see [The Santa Clause Problem]
@@ -51,4 +89,4 @@ Hopefully if you're a Scala developer you will have already noticed that
 Permutive is making significant contributions to the open source Scala community
 through the work of [Travis Brown](https://github.com/travisbrown).
 Hopefully this post has convinced you that we have a wider commitment to open source,
-both in Scala and (watch this space) Haskell.
+both in Scala and (watch this space) Haskell. Come join us!
