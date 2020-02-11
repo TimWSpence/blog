@@ -1,0 +1,54 @@
+--- title: Cats STM 0.6.0 ---
+
+Today marks the release of version 0.6.0 of [Cats
+STM](https://github.com/TimWSpence/cats-stm) with several significant bug fixes
+and improvements to the fairness of retry scheduling.
+
+If you are not familiar with the concept of STM (Software Transactional Memory)
+then you should definitely read the wonderful original paper [Beautiful
+Concurrency](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/beautiful.pdf)
+or at least some of the docs for this library :D However, I will endeavour to
+give a very brief overview here.
+
+The motivating observation is that the traditional tools for doing concurrent
+programming (mutexes, semaphores, etc) do not compose. Given two functions `f: A
+=> B` and `g: B => C` each acquiring mutexes, we cannot reason about the locking
+behaviour of ?????????
+
+The solution to this is the `STM` monad. This is compositional by definition
+(indeed, this practically is the definition of a monad) and exposes combinators
+such as
+
+TODO something about TVars here too
+
+`def map[A, B](s: STM[A], f: A => B): STM[B]`
+`def orElse[A](attempt: STM[A], fallback: STM[A]): STM[A]`
+`def check(check: => Boolean): STM[Unit]`
+
+A value of type `STM[A]` represents a computation that we would like to run
+transactionally and which should return a value of type `A`. How do we do that?
+The clue's in the name!
+
+`atomically[F[_], A](s: STM[A]): F[A]`
+
+Why does this return something of type `F[A]` (assume this is `IO[A]` for
+simplicity's sake) rather than something of type `A`? The execution of
+`atomically` is the point at which we acquire locks and mutate `TVar`s ie
+perform side effects and hence must be suspended in `IO`
+
+Here is a contrived example of what this looks like in practice:
+
+```scala
+
+```
+
+For a more involved example, see [The Santa Clause Problem]
+(https://timwspence.github.io/cats-stm/tutorial/tutorial.html) in the docs.
+
+## Open source at Permutive
+
+Hopefully if you're a Scala developer you will have already noticed that
+Permutive is making significant contributions to the open source Scala community
+through the work of [Travis Brown](https://github.com/travisbrown).
+Hopefully this post has convinced you that we have a wider commitment to open source,
+both in Scala and (watch this space) Haskell.
