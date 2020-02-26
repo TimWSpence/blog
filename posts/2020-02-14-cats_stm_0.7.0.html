@@ -62,20 +62,21 @@
 <a class="sourceLine" id="cb4-21" title="21">        _       &lt;- accountForTim.<span class="fu">modify</span>(_ - <span class="dv">100</span>)</a>
 <a class="sourceLine" id="cb4-22" title="22">        _       &lt;- accountForSteve.<span class="fu">modify</span>(_ + <span class="dv">100</span>)</a>
 <a class="sourceLine" id="cb4-23" title="23">      } <span class="kw">yield</span> ()</a>
-<a class="sourceLine" id="cb4-24" title="24"></a>
-<a class="sourceLine" id="cb4-25" title="25">  <span class="kw">private</span> <span class="kw">def</span> <span class="fu">giveTimMoreMoney</span>(accountForTim: TVar[Long]): IO[Unit] = <span class="kw">for</span> {</a>
-<a class="sourceLine" id="cb4-26" title="26">    _ &lt;- IO.<span class="fu">sleep</span>(<span class="fl">5000.</span>millis)</a>
-<a class="sourceLine" id="cb4-27" title="27">    _ &lt;- STM.<span class="fu">atomically</span>[IO](accountForTim.<span class="fu">modify</span>(_ + <span class="dv">1</span>))</a>
-<a class="sourceLine" id="cb4-28" title="28">  } <span class="kw">yield</span> ()</a>
-<a class="sourceLine" id="cb4-29" title="29"></a>
-<a class="sourceLine" id="cb4-30" title="30">  <span class="kw">private</span> <span class="kw">def</span> <span class="fu">printBalances</span>(accountForTim: TVar[Long], accountForSteve: TVar[Long]): IO[Unit] = <span class="kw">for</span> {</a>
-<a class="sourceLine" id="cb4-31" title="31">    amountForTim   &lt;- accountForTim.<span class="fu">get</span>.<span class="fu">commit</span>[IO]</a>
-<a class="sourceLine" id="cb4-32" title="32">    _              &lt;- <span class="fu">IO</span>(<span class="fu">println</span>(s<span class="st">&quot;Tim: $b&quot;</span>))</a>
-<a class="sourceLine" id="cb4-33" title="33">    amountForSteve &lt;- accountForSteve.<span class="fu">get</span>.<span class="fu">commit</span>[IO]</a>
-<a class="sourceLine" id="cb4-34" title="34">    _              &lt;- <span class="fu">IO</span>(<span class="fu">println</span>(s<span class="st">&quot;Steve: $b&quot;</span>))</a>
-<a class="sourceLine" id="cb4-35" title="35">  } <span class="kw">yield</span> ()</a>
-<a class="sourceLine" id="cb4-36" title="36"></a>
-<a class="sourceLine" id="cb4-37" title="37">}</a></code></pre></div>
+<a class="sourceLine" id="cb4-24" title="24">    }</a>
+<a class="sourceLine" id="cb4-25" title="25"></a>
+<a class="sourceLine" id="cb4-26" title="26">  <span class="kw">private</span> <span class="kw">def</span> <span class="fu">giveTimMoreMoney</span>(accountForTim: TVar[Long]): IO[Unit] = <span class="kw">for</span> {</a>
+<a class="sourceLine" id="cb4-27" title="27">    _ &lt;- IO.<span class="fu">sleep</span>(<span class="fl">5000.</span>millis)</a>
+<a class="sourceLine" id="cb4-28" title="28">    _ &lt;- STM.<span class="fu">atomically</span>[IO](accountForTim.<span class="fu">modify</span>(_ + <span class="dv">1</span>))</a>
+<a class="sourceLine" id="cb4-29" title="29">  } <span class="kw">yield</span> ()</a>
+<a class="sourceLine" id="cb4-30" title="30"></a>
+<a class="sourceLine" id="cb4-31" title="31">  <span class="kw">private</span> <span class="kw">def</span> <span class="fu">printBalances</span>(accountForTim: TVar[Long], accountForSteve: TVar[Long]): IO[Unit] = <span class="kw">for</span> {</a>
+<a class="sourceLine" id="cb4-32" title="32">    amountForTim   &lt;- accountForTim.<span class="fu">get</span>.<span class="fu">commit</span>[IO]</a>
+<a class="sourceLine" id="cb4-33" title="33">    _              &lt;- <span class="fu">IO</span>(<span class="fu">println</span>(s<span class="st">&quot;Tim: $amountForTim&quot;</span>))</a>
+<a class="sourceLine" id="cb4-34" title="34">    amountForSteve &lt;- accountForSteve.<span class="fu">get</span>.<span class="fu">commit</span>[IO]</a>
+<a class="sourceLine" id="cb4-35" title="35">    _              &lt;- <span class="fu">IO</span>(<span class="fu">println</span>(s<span class="st">&quot;Steve: $amountForSteve&quot;</span>))</a>
+<a class="sourceLine" id="cb4-36" title="36">  } <span class="kw">yield</span> ()</a>
+<a class="sourceLine" id="cb4-37" title="37"></a>
+<a class="sourceLine" id="cb4-38" title="38">}</a></code></pre></div>
 <p>For a more involved example, see [The Santa Clause Problem] (https://timwspence.github.io/cats-stm/tutorial/tutorial.html) in the docs.</p>
 <h2 id="the-importance-of-laws-testing">The importance of laws testing</h2>
 <p>If you’ve followed cats-stm for a while, you may notice that the <a href="https://github.com/TimWSpence/cats-stm/blob/f9ca142d191eac143dbe2b4e0adafd48cae49db6/core/src/main/scala/io/github/timwspence/cats/stm/STM.scala#L119">Alternative instance for STM</a> has been removed. Upon adding laws testing, I discovered that it does not satisfy the alternative right-absorption and right-distributivity laws (and indeed I believe that STM cannot satisfy these laws in its current formulation). I’ve therefore downgraded it to a <code>MonoidK</code> instance, which can be lawfully implemented.</p>
