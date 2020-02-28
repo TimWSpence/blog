@@ -82,7 +82,7 @@
 <a class="sourceLine" id="cb4-41" title="41">    } <span class="kw">yield</span> ()</a>
 <a class="sourceLine" id="cb4-42" title="42"></a>
 <a class="sourceLine" id="cb4-43" title="43">}</a></code></pre></div>
-<p>For a more involved example, see [The Santa Clause Problem] (https://timwspence.github.io/cats-stm/tutorial/tutorial.html) in the docs.</p>
+<p>For a more involved example, see <a href="https://timwspence.github.io/cats-stm/tutorial/tutorial.html">The Santa Clause Problem</a> in the docs.</p>
 <h2 id="the-importance-of-laws-testing">The importance of laws testing</h2>
 <p>If you’ve followed cats-stm for a while, you may notice that the <a href="https://github.com/TimWSpence/cats-stm/blob/f9ca142d191eac143dbe2b4e0adafd48cae49db6/core/src/main/scala/io/github/timwspence/cats/stm/STM.scala#L119">Alternative instance for STM</a> has been removed. Upon adding laws testing, I discovered that it does not satisfy the alternative right-absorption and right-distributivity laws (and indeed I believe that STM cannot satisfy these laws in its current formulation). I’ve therefore downgraded it to a <code>MonoidK</code> instance, which can be lawfully implemented.</p>
 <p>If you haven’t tried out law-testing before, please do!! It turns out to be immensely valuable! :D If we are unsure that a type conforms lawfully to a typeclass then we cannot safely refactor operations of that typeclass on that type.</p>
