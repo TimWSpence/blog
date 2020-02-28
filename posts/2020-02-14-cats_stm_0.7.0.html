@@ -38,7 +38,7 @@
 <p>A value of type <code>STM[A]</code> represents a computation that we would like to run atomically and which should return a value of type <code>A</code>. How do we do that? The clue’s in the name!</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb3-1" title="1"><span class="kw">def</span> atomically[F[_], A](s: STM[A]): F[A]</a></code></pre></div>
 <p>Why does this return something of type <code>F[A]</code> (assume this is <code>IO[A]</code> for simplicity’s sake) rather than something of type <code>A</code>? The execution of <code>atomically</code> is the point at which we acquire locks and mutate <code>TVar</code>s ie perform side effects and hence must be suspended in <code>IO</code>.</p>
-<p>Here is a contrived example of what this looks like in practice:</p>
+<p>Here is a contrived example of what this looks like in practice. We use the check combinator to retry transferring money from Tim and Steve until we have enough money in Tim’s account:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb4-1" title="1"><span class="kw">import</span> cats.<span class="fu">effect</span>.{ExitCode, IO, IOApp}</a>
 <a class="sourceLine" id="cb4-2" title="2"><span class="kw">import</span> io.<span class="fu">github</span>.<span class="fu">timwspence</span>.<span class="fu">cats</span>.<span class="fu">stm</span>.{TVar, STM}</a>
 <a class="sourceLine" id="cb4-3" title="3"><span class="kw">import</span> scala.<span class="fu">concurrent</span>.<span class="fu">duration</span>._</a>
