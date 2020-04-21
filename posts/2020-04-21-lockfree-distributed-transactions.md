@@ -1,0 +1,107 @@
+---
+title: Lock-free Distributed Transactions
+---
+
+This is a description of a simple but (as far as I am aware) novel solution a devised some time ago
+for implementing lock-free distributed transactions. I thought it was quite elegant so I've
+summarised it here for your interest.
+
+### The problem
+
+In order to function, the API we were writing needed to obtain metadata on our customer's configuration.
+This was stored in a Postgres database which for Google Cloud reasons was quite limited in terms of
+the number of concurrent connections it could support, and served via another internal API. Because
+of the concurrent connections limit, we were struggling to scale our metadata API to support the
+volume of requests inbound from our main API.
+
+We therefore decided that we would like to replicate the metadata to a more scalable data store that
+would enable us to scale the API (we'll call it the metadata service from now on) sitting in front of it.
+To that end, we wanted to design a system with the follow characteristics:
+- Metadata should be stored in a scalable data store (we were already using Google BigTable so this was
+  the natural choice)
+- Metadata should be synchronized between Postgres and the scalabale data store (presumably by some 
+  scheduled sync job)
+- It is ok for the sync to be eventually consistent (we're happy with a short delay when our API runs with
+  old data)
+- It is not ok for a sync to only partially succeed as a partially successful write could lead to
+  inconsistent behaviour from the API consuming it
+- The metadata service will be auto-scaled and load-balanced via Kubernetes so the sync job cannot
+  depend on talking to a particular instance of the service
+  
+These last two requirements in particular cause some problems - we cannot maintain any transaction-related
+state in the metadata service as the next request from the sync job may be load-balanced to a different
+instance.
+
+### The solution
+
+This is probably by no means the only solution to the problem but it is the one I came up with so here goes.
+
+The idea is similar to atomic renaming of directories and assumes that the backing store is a key-value 
+store (such as Google BigTable). The metadata service will expose an API that looks like
+this (assuming that the imaginatively named `X`, `Y` and `Z` are the domain objects that we are syncing):
+
+```haskell
+newtype Version = Version { getVersion :: Int }
+newtype Id = Id { getId :: UUID }
+
+getX :: Version -> Id -> IO X
+setX :: Version -> Id -> X -> IO ()
+
+getY :: Version -> Id -> IO Y
+setY :: Version -> Id -> Y -> IO ()
+
+getZ :: Version -> Id -> IO Z
+setZ :: Version -> Id -> Z -> IO ()
+
+getCurrentVersion :: IO Version
+setCurrentVersion :: Version -> IO ()
+```
+
+The API should not cache data (or at least this requires more thought and should operate as a write-through
+cache). The metadata service responds to `get` requests by reading the current version and generating a key
+obtained by concatenating the version and the id and retrieving that row from the data store:
+
+```haskell
+getX :: Id -> IO X
+getX id = do
+  version <- getCurrentVersion
+  let key = version <> id
+  readFromStore key
+
+writeX :: Version -> Id -> X -> IO ()
+writeX v id x = writeToDataStore key x
+  where
+    key = v <> id
+```
+
+The client can transactionally write a new version of the metadata by generating a new version,
+writing all the data against that and then setting the current version to the generated version.
+Note that the transaction may succeed but the client be unaware if sending the response to the
+`setCurrentVersion` fails. In our case (the simplest one to reason about), we only have one
+client so using the current time in millis as the version is guaranteed to be monotonic. If you
+have multiple clients, then it is a case of last write wins - whichever writes to the current version
+field second will have their writes visible.
+
+```haskell
+sync :: [(Id, X)] -> [(Id, Y)] -> [(Id, Z)] -> IO ()
+sync xs ys zs = do
+  version <- Version <$> getCurrentTimeMills
+  traverse (uncurry $ setX version) xs
+  traverse (uncurry $ setY version) ys
+  traverse (uncurry $ setZ version) zs
+  setCurrentVersion version
+```
+
+And there you have it! We can sync data from our relational database to a key-value store and guarantee
+that updates will only be visible if the entire transaction succeeds. This probably requires some form
+of garbage collection on the key-value store to remove old versions. For Google BigTable, we get that for
+free as you can set a TTL on rows (or cells to be more precise - BigTable has a slightly more complex
+data model). We set our TTL high enough (~ 1 week) that with running a sync job every 5 minutes we're
+pretty confident we can recover from any failures in the sync job.
+
+
+### Extensions
+
+Obviously this approach trivially generalizes to transactionally updating subsets of the data, so long
+as there is a deterministic function `Data -> Version Row`, which tells us where to read the current
+version for that peice of data. Not sure how useful that is but it is worth noting anyway.
