@@ -2,8 +2,8 @@
 title: Lock-free Distributed Transactions
 ---
 
-This is a description of a simple but (as far as I am aware) novel solution a devised some time ago
-for implementing lock-free distributed transactions. I thought it was quite elegant so I've
+This is a description of a simple solution a devised some time ago for implementing
+lock-free distributed transactions in certain situations. I thought it was quite elegant so I've
 summarised it here for your interest.
 
 ### The problem
