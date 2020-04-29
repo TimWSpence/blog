@@ -1,5 +1,5 @@
 ---
-title: Lock-free Distributed Transactions
+title: Lock-free distributed transactions
 ---
 
 This is a description of a simple solution a devised some time ago for implementing

@@ -1,5 +1,5 @@
 ---
-title: Optimized Docker builds for Haskell stack
+title: Optimized Docker builds for Haskell Stack
 ---
 
 Stack recently [removed support for automatically building Docker images for
