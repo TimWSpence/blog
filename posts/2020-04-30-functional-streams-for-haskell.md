@@ -13,7 +13,8 @@ by the way you run the stream, rather than the stream itself
 
 The following is an experiment in starting with that idea, picking the first stream representation
 that came into my head and typing for a couple of hours. I think the result is surprisingly
-expressive (if _very_ inefficient)! See the examples at the end for what usage looks like.
+expressive (if _very_ inefficient and entirely exception unsafe)! See the examples at the end
+for what usage looks like.
 
 `example2` in particular illustrates the part of the API which is a bit more painful (AFAIK) in
 Pipes or Conduit - dynamically generating and concatenating substreams. In my experience, I've had
