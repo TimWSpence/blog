@@ -33,9 +33,9 @@ module Streaming
   )
 where
 
-import Data.Functor.Identity
 import Control.Applicative
 import Control.Monad
+import Data.Functor.Identity
 import Data.Monoid
 import System.IO
 
@@ -62,7 +62,7 @@ instance Monad m => Monad (Stream m) where
 
 instance Monad m => Semigroup (Stream m a) where
   (Yield ma next) <> s = Yield ma (next <> s)
-  (Await mx cont) <> s = Await mx ((<>s) . cont)
+  (Await mx cont) <> s = Await mx ((<> s) . cont)
   (Done close) <> s = case s of
     (Yield ma next) -> Yield (close >> ma) next
     (Await mx cont) -> Await (close >> mx) cont
@@ -93,7 +93,7 @@ takeS 0 s = case s of
   s@(Await mx cont) -> Await mx (takeS 0 . cont)
   (Done close) -> Done close
 takeS n s = case s of
-  (Yield ma next) -> Yield ma (takeS (n-1)  next)
+  (Yield ma next) -> Yield ma (takeS (n -1) next)
   (Await mx cont) -> Await mx (takeS n . cont)
   (Done close) -> Done close
 
@@ -140,7 +140,7 @@ example1 = drain . mapF putStrLn $ fromFile "/tmp/data"
 
 -- Duplicate every element in the input list -> [1,1,2,2,3,3]
 example2 :: [Int]
-example2 = runIdentity . toList . (>>= \x -> return x <> return x) $ fromList [1,2,3]
+example2 = runIdentity . toList . (>>= \x -> return x <> return x) $ fromList [1, 2, 3]
 
 -- Concatenate files to list
 example3 :: IO [String]
@@ -148,7 +148,7 @@ example3 = toList $ (fromFile "/tmp/data") <> (fromFile "/tmp/data2")
 
 -- Sum list
 example4 :: Int
-example4 = getSum . runIdentity . foldMonoid . fmap Sum $ fromList [1,2,3,4,5]
+example4 = getSum . runIdentity . foldMonoid . fmap Sum $ fromList [1, 2, 3, 4, 5]
 
 -- Copy file
 example5 :: IO ()
@@ -156,5 +156,5 @@ example5 = toFile "/tmp/copy" $ fromFile "/tmp/data"
 
 -- Take from list -> [1,2,3]
 example6 :: [Int]
-example6 = runIdentity . toList . takeS 3 $ fromList [1,2,3,4,5]
+example6 = runIdentity . toList . takeS 3 $ fromList [1, 2, 3, 4, 5]
 ```
