@@ -36,9 +36,9 @@
 <a class="sourceLine" id="cb1-7" title="7">  )</a>
 <a class="sourceLine" id="cb1-8" title="8"><span class="kw">where</span></a>
 <a class="sourceLine" id="cb1-9" title="9"></a>
-<a class="sourceLine" id="cb1-10" title="10"><span class="kw">import</span> <span class="dt">Data.Functor.Identity</span></a>
-<a class="sourceLine" id="cb1-11" title="11"><span class="kw">import</span> <span class="dt">Control.Applicative</span></a>
-<a class="sourceLine" id="cb1-12" title="12"><span class="kw">import</span> <span class="dt">Control.Monad</span></a>
+<a class="sourceLine" id="cb1-10" title="10"><span class="kw">import</span> <span class="dt">Control.Applicative</span></a>
+<a class="sourceLine" id="cb1-11" title="11"><span class="kw">import</span> <span class="dt">Control.Monad</span></a>
+<a class="sourceLine" id="cb1-12" title="12"><span class="kw">import</span> <span class="dt">Data.Functor.Identity</span></a>
 <a class="sourceLine" id="cb1-13" title="13"><span class="kw">import</span> <span class="dt">Data.Monoid</span></a>
 <a class="sourceLine" id="cb1-14" title="14"><span class="kw">import</span> <span class="dt">System.IO</span></a>
 <a class="sourceLine" id="cb1-15" title="15"></a>
@@ -65,7 +65,7 @@
 <a class="sourceLine" id="cb1-36" title="36"></a>
 <a class="sourceLine" id="cb1-37" title="37"><span class="kw">instance</span> <span class="dt">Monad</span> m <span class="ot">=&gt;</span> <span class="dt">Semigroup</span> (<span class="dt">Stream</span> m a) <span class="kw">where</span></a>
 <a class="sourceLine" id="cb1-38" title="38">  (<span class="dt">Yield</span> ma next) <span class="fu">&lt;&gt;</span> s <span class="fu">=</span> <span class="dt">Yield</span> ma (next <span class="fu">&lt;&gt;</span> s)</a>
-<a class="sourceLine" id="cb1-39" title="39">  (<span class="dt">Await</span> mx cont) <span class="fu">&lt;&gt;</span> s <span class="fu">=</span> <span class="dt">Await</span> mx ((<span class="fu">&lt;&gt;</span>s) <span class="fu">.</span> cont)</a>
+<a class="sourceLine" id="cb1-39" title="39">  (<span class="dt">Await</span> mx cont) <span class="fu">&lt;&gt;</span> s <span class="fu">=</span> <span class="dt">Await</span> mx ((<span class="fu">&lt;&gt;</span> s) <span class="fu">.</span> cont)</a>
 <a class="sourceLine" id="cb1-40" title="40">  (<span class="dt">Done</span> close) <span class="fu">&lt;&gt;</span> s <span class="fu">=</span> <span class="kw">case</span> s <span class="kw">of</span></a>
 <a class="sourceLine" id="cb1-41" title="41">    (<span class="dt">Yield</span> ma next) <span class="ot">-&gt;</span> <span class="dt">Yield</span> (close <span class="fu">&gt;&gt;</span> ma) next</a>
 <a class="sourceLine" id="cb1-42" title="42">    (<span class="dt">Await</span> mx cont) <span class="ot">-&gt;</span> <span class="dt">Await</span> (close <span class="fu">&gt;&gt;</span> mx) cont</a>
@@ -96,7 +96,7 @@
 <a class="sourceLine" id="cb1-67" title="67">  s<span class="fu">@</span>(<span class="dt">Await</span> mx cont) <span class="ot">-&gt;</span> <span class="dt">Await</span> mx (takeS <span class="dv">0</span> <span class="fu">.</span> cont)</a>
 <a class="sourceLine" id="cb1-68" title="68">  (<span class="dt">Done</span> close) <span class="ot">-&gt;</span> <span class="dt">Done</span> close</a>
 <a class="sourceLine" id="cb1-69" title="69">takeS n s <span class="fu">=</span> <span class="kw">case</span> s <span class="kw">of</span></a>
-<a class="sourceLine" id="cb1-70" title="70">  (<span class="dt">Yield</span> ma next) <span class="ot">-&gt;</span> <span class="dt">Yield</span> ma (takeS (n<span class="fu">-</span><span class="dv">1</span>)  next)</a>
+<a class="sourceLine" id="cb1-70" title="70">  (<span class="dt">Yield</span> ma next) <span class="ot">-&gt;</span> <span class="dt">Yield</span> ma (takeS (n <span class="fu">-</span><span class="dv">1</span>) next)</a>
 <a class="sourceLine" id="cb1-71" title="71">  (<span class="dt">Await</span> mx cont) <span class="ot">-&gt;</span> <span class="dt">Await</span> mx (takeS n <span class="fu">.</span> cont)</a>
 <a class="sourceLine" id="cb1-72" title="72">  (<span class="dt">Done</span> close) <span class="ot">-&gt;</span> <span class="dt">Done</span> close</a>
 <a class="sourceLine" id="cb1-73" title="73"></a>
@@ -143,7 +143,7 @@
 <a class="sourceLine" id="cb1-114" title="114"></a>
 <a class="sourceLine" id="cb1-115" title="115"><span class="co">-- Duplicate every element in the input list -&gt; [1,1,2,2,3,3]</span></a>
 <a class="sourceLine" id="cb1-116" title="116"><span class="ot">example2 ::</span> [<span class="dt">Int</span>]</a>
-<a class="sourceLine" id="cb1-117" title="117">example2 <span class="fu">=</span> runIdentity <span class="fu">.</span> toList <span class="fu">.</span> (<span class="fu">&gt;&gt;=</span> \x <span class="ot">-&gt;</span> <span class="fu">return</span> x <span class="fu">&lt;&gt;</span> <span class="fu">return</span> x) <span class="fu">$</span> fromList [<span class="dv">1</span>,<span class="dv">2</span>,<span class="dv">3</span>]</a>
+<a class="sourceLine" id="cb1-117" title="117">example2 <span class="fu">=</span> runIdentity <span class="fu">.</span> toList <span class="fu">.</span> (<span class="fu">&gt;&gt;=</span> \x <span class="ot">-&gt;</span> <span class="fu">return</span> x <span class="fu">&lt;&gt;</span> <span class="fu">return</span> x) <span class="fu">$</span> fromList [<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>]</a>
 <a class="sourceLine" id="cb1-118" title="118"></a>
 <a class="sourceLine" id="cb1-119" title="119"><span class="co">-- Concatenate files to list</span></a>
 <a class="sourceLine" id="cb1-120" title="120"><span class="ot">example3 ::</span> <span class="dt">IO</span> [<span class="dt">String</span>]</a>
@@ -151,7 +151,7 @@
 <a class="sourceLine" id="cb1-122" title="122"></a>
 <a class="sourceLine" id="cb1-123" title="123"><span class="co">-- Sum list</span></a>
 <a class="sourceLine" id="cb1-124" title="124"><span class="ot">example4 ::</span> <span class="dt">Int</span></a>
-<a class="sourceLine" id="cb1-125" title="125">example4 <span class="fu">=</span> getSum <span class="fu">.</span> runIdentity <span class="fu">.</span> foldMonoid <span class="fu">.</span> <span class="fu">fmap</span> <span class="dt">Sum</span> <span class="fu">$</span> fromList [<span class="dv">1</span>,<span class="dv">2</span>,<span class="dv">3</span>,<span class="dv">4</span>,<span class="dv">5</span>]</a>
+<a class="sourceLine" id="cb1-125" title="125">example4 <span class="fu">=</span> getSum <span class="fu">.</span> runIdentity <span class="fu">.</span> foldMonoid <span class="fu">.</span> <span class="fu">fmap</span> <span class="dt">Sum</span> <span class="fu">$</span> fromList [<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>]</a>
 <a class="sourceLine" id="cb1-126" title="126"></a>
 <a class="sourceLine" id="cb1-127" title="127"><span class="co">-- Copy file</span></a>
 <a class="sourceLine" id="cb1-128" title="128"><span class="ot">example5 ::</span> <span class="dt">IO</span> ()</a>
@@ -159,7 +159,7 @@
 <a class="sourceLine" id="cb1-130" title="130"></a>
 <a class="sourceLine" id="cb1-131" title="131"><span class="co">-- Take from list -&gt; [1,2,3]</span></a>
 <a class="sourceLine" id="cb1-132" title="132"><span class="ot">example6 ::</span> [<span class="dt">Int</span>]</a>
-<a class="sourceLine" id="cb1-133" title="133">example6 <span class="fu">=</span> runIdentity <span class="fu">.</span> toList <span class="fu">.</span> takeS <span class="dv">3</span> <span class="fu">$</span> fromList [<span class="dv">1</span>,<span class="dv">2</span>,<span class="dv">3</span>,<span class="dv">4</span>,<span class="dv">5</span>]</a></code></pre></div>
+<a class="sourceLine" id="cb1-133" title="133">example6 <span class="fu">=</span> runIdentity <span class="fu">.</span> toList <span class="fu">.</span> takeS <span class="dv">3</span> <span class="fu">$</span> fromList [<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>]</a></code></pre></div>
     </section>
 </article>
 
