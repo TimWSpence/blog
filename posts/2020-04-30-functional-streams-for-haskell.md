@@ -43,7 +43,6 @@ import System.IO
 data Stream (m :: * -> *) a where
   Yield :: m a -> Stream m a -> Stream m a
   Await :: m x -> (x -> Stream m a) -> Stream m a
-  Concat :: Stream m a -> Stream m a -> Stream m a
   Done :: m () -> Stream m a
 
 instance Monad m => Functor (Stream m) where
@@ -57,13 +56,17 @@ instance Monad m => Applicative (Stream m) where
 instance Monad m => Monad (Stream m) where
   return a = Yield (return a) (Done (return ()))
 
-  (Yield ma next) >>= f = Concat (Await ma f) (next >>= f)
+  (Yield ma next) >>= f = Await ma ((<> (next >>= f)) . f)
   (Await ma cont) >>= f = Await ma (cont >=> f)
-  (Concat s1 s2) >>= f = Concat (s1 >>= f) (s2 >>= f)
   (Done close) >>= f = Done close
 
-instance Semigroup (Stream m a) where
-  (<>) = Concat
+instance Monad m => Semigroup (Stream m a) where
+  (Yield ma next) <> s = Yield ma (next <> s)
+  (Await mx cont) <> s = Await mx ((<>s) . cont)
+  (Done close) <> s = case s of
+    (Yield ma next) -> Yield (close >> ma) next
+    (Await mx cont) -> Await (close >> mx) cont
+    (Done close') -> Done (close >> close')
 
 instance Monad m => Monoid (Stream m a) where
   mempty = Done (return ())
@@ -83,6 +86,17 @@ fromFile file = Await handle cont
     handleStatus h = fmap (h,) (hIsEOF h)
     cont (h, isClosed) = if (isClosed) then Done (hClose h) else Yield (hGetLine h) (Await (handleStatus h) cont)
 
+-- This is very inefficient as it doesn't close streams early
+takeS :: Int -> Stream m a -> Stream m a
+takeS 0 s = case s of
+  (Yield _ next) -> takeS 0 next
+  s@(Await mx cont) -> Await mx (takeS 0 . cont)
+  (Done close) -> Done close
+takeS n s = case s of
+  (Yield ma next) -> Yield ma (takeS (n-1)  next)
+  (Await mx cont) -> Await mx (takeS n . cont)
+  (Done close) -> Done close
+
 toFile :: FilePath -> Stream IO String -> IO ()
 toFile file stream = withFile file WriteMode $ \h -> drain . mapF (hPutStrLn h) $ stream
 
@@ -94,7 +108,6 @@ toList (Yield ma next) = do
 toList (Await ma cont) = do
   a <- ma
   toList (cont a)
-toList (Concat s1 s2) = liftA2 (<>) (toList s1) (toList s2)
 toList (Done close) = close >> return []
 
 fold :: (Monad m) => (b -> a -> b) -> b -> Stream m a -> m b
@@ -104,9 +117,6 @@ fold f b (Yield ma next) = do
 fold f b (Await ma cont) = do
   a <- ma
   fold f b (cont a)
-fold f b (Concat s1 s2) = do
-  b' <- fold f b s1
-  fold f b' s2
 fold _ b (Done close) = close >> return b
 
 foldMonoid :: (Monad m, Monoid a) => Stream m a -> m a
@@ -116,14 +126,12 @@ foldMonoid = fold (<>) mempty
 drain :: Monad m => Stream m a -> m ()
 drain (Yield ma next) = ma >> drain next
 drain (Await ma cont) = ma >>= (drain . cont)
-drain (Concat s1 s2) = drain s1 >> drain s2
 drain (Done close) = close
 
 -- Map an effectful computation across a stream
 mapF :: Monad m => (a -> m b) -> Stream m a -> Stream m b
 mapF f (Yield ma next) = Yield (ma >>= f) (mapF f next)
 mapF f (Await ma cont) = Await ma (mapF f . cont)
-mapF f (Concat s1 s2) = Concat (mapF f s1) (mapF f s2)
 mapF f (Done close) = Done close
 
 -- Print each line in /tmp/data in turn
@@ -145,4 +153,8 @@ example4 = getSum . runIdentity . foldMonoid . fmap Sum $ fromList [1,2,3,4,5]
 -- Copy file
 example5 :: IO ()
 example5 = toFile "/tmp/copy" $ fromFile "/tmp/data"
+
+-- Take from list -> [1,2,3]
+example6 :: [Int]
+example6 = runIdentity . toList . takeS 3 $ fromList [1,2,3,4,5]
 ```
