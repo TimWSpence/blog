@@ -3,8 +3,8 @@ title: About
 ---
 
 I’m Tim Spence. I like strongly typed functional programming languages
-(primarily Haskell) and currently work for [Permutive](https://permutive.com).
-Check us out, we’re always looking for great engineers!
+(primarily Haskell/Scala) and am currently writing Scala for
+[ITV](https://www.itv.com/).
 
 You can also find me in the following places:
 
