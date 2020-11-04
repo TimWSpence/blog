@@ -2,7 +2,7 @@
 title: Functional streams for Haskell Part 2
 ---
 
-In [part 1](./2020-04-30-functional-streams-for-haskell.md) we developed a simple
+In [part 1](./2020-04-30-functional-streams-for-haskell.html) we developed a simple
 streaming library based on the first stream representation that popped into my head,
 which happened to be:
 
