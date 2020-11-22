@@ -67,8 +67,9 @@ looking for code such as `Sync[F].delay(someUnsafeJdbcCode())`
 
 As `Sync` is at the top of the CE2 typeclass hierarchy that means that any time
 we bring a CE2 typeclass into scope then we must necessarily introduce `delay`
-into scope and hence we have no more ability to reason about effects than if we
-coded directly in `IO`!
+into scope. Hence we have no more ability to reason about effects than if we
+coded directly in `IO`, even if we just wanted `Concurrent` so that we can
+spawn some fibers.
 
 ## Cats Effect 3
 
