@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>My Hakyll Blog - Polymorphic Effects in Scala</title>
+        <link rel="stylesheet" href="../stylesheet.css" />
+    </head>
+    <body>
+        <header>
+            <nav>
+                <a href="../">Home</a>
+                <a href="../about.html">About</a>
+                <a href="../archive.html">Archive</a>
+            </nav>
+        </header>
+
+        <main role="main">
+            <h1>Polymorphic Effects in Scala</h1>
+            <article>
+    <section class="header">
+        Posted on November 22, 2020
+        
+    </section>
+    <section>
+        <p>A common pattern in Typelevel scala is to write programs in terms of a polymorphic effect type <code>F</code>:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb1-1" title="1"><span class="kw">def</span> program[F[_] : Monad] =</a>
+<a class="sourceLine" id="cb1-2" title="2">  <span class="kw">for</span> {</a>
+<a class="sourceLine" id="cb1-3" title="3">    x &lt;- Monad[F].<span class="fu">pure</span>(<span class="dv">1</span>)</a>
+<a class="sourceLine" id="cb1-4" title="4">    y &lt;- Monad[F].<span class="fu">pure</span>(<span class="dv">1</span>)</a>
+<a class="sourceLine" id="cb1-5" title="5">  } <span class="kw">yield</span> x + y</a></code></pre></div>
+<p>Where the context bound on <code>F</code> lies somewhere in the <code>Functor</code> hierarchy, from <code>Functor</code> all the way down to <code>ConcurrentEffect</code> (in Cats Effect 2).</p>
+<p>Whilst ubiquitous, the reasons why you might want to do this are often misunderstood. The often cited reason is that it allows you to swap out your effect system (Cats Effect -&gt; Monix, Monix -&gt; Cats Effect, etc) without modifying your application. While this is undoubtedly true (assuming you’ve stuck rigidly to the typeclass-based abstractions), I can honestly say that I’ve never done it and I’d be very surprised if many people ever did.</p>
+<p>So if that’s not a justification, should we just go back to writing monomorphic code in a concrete <code>IO</code> monad?</p>
+<h2 id="reasoning-about-effects">Reasoning about Effects</h2>
+<p>Whilst working with a concrete effect type is undoubtedly simpler and more beginner-friendly, the loss of information from the functor context bound means that the function signature conveys strictly less information about the behaviour of the program. Consider the following:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb2-1" title="1"><span class="kw">def</span> subprogram[F[_] : Monad : HttpClient]: F[Unit] = ???</a></code></pre></div>
+<p>Here we can safely conclude <em>from the type signature</em> that this program does not eg modify the database. There is simply no way for the programmer to introduce such an effect (aside from simply by-passing the effect system entirely but unfortunately there’s not much we can do about that). Compare that with:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb3-1" title="1"><span class="kw">def</span> subprogram: IO[Unit] = ???</a></code></pre></div>
+<p>What effects does this program perform? Unforunately, the only conclusion we can draw from the type signature is: literally <em>anything</em> in the world! The only way we can know if it modifies the database is to go and read the source of the entire transitive call-graph of <code>subprogram</code>!</p>
+<h2 id="the-unfortunate-history-of-cats-effect">The unfortunate history of Cats Effect</h2>
+<p>Possibly part of the reason the benefits of this approach have been misunderstood is that the design of the Cats Effect 2 typeclass hierarchy severely limits this kind of reasoning. The reason for this is that <code>Sync</code> and <code>Async</code> are at the top of the CE2 hierarchy. These provide, respectively, <code>delay</code> and <code>async</code> which are our FFI for suspending arbitrary effects in <code>F</code>.</p>
+<p>Any time a <code>Sync[F]</code> instance is in scope we lose all ability to reason about effects (exactly as if we were coding in plain <code>IO</code>). Consider our reasoning about database modification from before. The only way to tell if the database is modified is again to traverse the entire transitive call-graph of <code>subprogram</code> looking for code such as <code>Sync[F].delay(someUnsafeJdbcCode())</code></p>
+<p>As <code>Sync</code> is at the top of the CE2 typeclass hierarchy that means that any time we bring a CE2 typeclass into scope then we must necessarily introduce <code>delay</code> into scope and hence we have no more ability to reason about effects than if we coded directly in <code>IO</code>!</p>
+<h2 id="cats-effect-3">Cats Effect 3</h2>
+<p>Fortunately this will soon be rectified with the release of cats effect 3! :) This pushes <code>Sync</code> and <code>Async</code> to the bottom of the typeclass hierarchy so that you can introduce other CE3 typeclasses into scope without losing the ability to reason about effects. For example <code>Spawn</code> is a typeclass that allows you to start/cancel/wait for fibers.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb4-1" title="1"><span class="kw">def</span> subprogram[F[_] : HttpClient : Spawn]: F[Unit] = ???</a></code></pre></div>
+<p>We can deduce that this subprogram may make http calls and may maipulate fibers and <em>nothing</em> else.</p>
+<h2 id="writing-your-own-effect-typeclasses">Writing your own effect typeclasses</h2>
+<p>At this point it’s worth noting that the new cats effect typeclasses aren’t particularly special (other than having sets of laws that ensure that they compose sensibly with other CE combinators). It’s entirely possible to build your own. For example, if we decided we couldn’t wait till the release of CE3 to have access to a <code>Spawn</code> typeclass that doesn’t break effectful reasoning by introducing <code>delay</code> into scope, we could write our own!</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb5-1" title="1"><span class="co">//Sketchy outline!</span></a>
+<a class="sourceLine" id="cb5-2" title="2"><span class="kw">trait</span> Spawn[F[_]] {</a>
+<a class="sourceLine" id="cb5-3" title="3">  <span class="kw">def</span> start[A](fa: F[A]): F[Fiber[F, A]]</a>
+<a class="sourceLine" id="cb5-4" title="4">}</a>
+<a class="sourceLine" id="cb5-5" title="5"></a>
+<a class="sourceLine" id="cb5-6" title="6"><span class="kw">object</span> Spawn {</a>
+<a class="sourceLine" id="cb5-7" title="7">  <span class="kw">implicit</span> <span class="kw">def</span> spawnForConcurrent[F[_]](<span class="kw">implicit</span> F: Concurrent[F]): Spawn[F] =</a>
+<a class="sourceLine" id="cb5-8" title="8">    <span class="kw">new</span> Spawn[F] {</a>
+<a class="sourceLine" id="cb5-9" title="9">      <span class="kw">def</span> start[A](fa: F[A]): F[Fiber[F, A]] = F.<span class="fu">start</span>(fa)</a>
+<a class="sourceLine" id="cb5-10" title="10">  }</a>
+<a class="sourceLine" id="cb5-11" title="11">}</a></code></pre></div>
+<h2 id="thinking-more-about-constraining-effects">Thinking more about constraining effects</h2>
+<p>Hopefully that’s at least convinced you that there are concrete benefits to writing code with a polymorphic effect type. If you want to think more about this in a slightly more abstract setting. I <em>highly</em> recommend Runar’s classic talk <a href="https://www.youtube.com/watch?v=GqmsQeSzMdw">Constraints liberate, liberties contrain</a></p>
+<h2 id="postscript">Postscript</h2>
+<p>As an entirely subjective point of style for polymorphic effects, I find the following to work well:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb6-1" title="1"><span class="kw">def</span> subprogram[F[_]](<span class="kw">implicit</span> F: Constraint[F]) = ???</a></code></pre></div>
+<p>where <code>Constraint</code> is the (least privileged) member of the <code>Functor</code> hierarchy that we require. This means that in the body of <code>subprogram</code> we can write <code>F.map</code> instead of <code>Functor[F].map</code>, which reduces syntactic noise, and means we only have to change one word in the type signature if we discover at a later point that we need a more powerful constraint like <code>Applicative</code> - the body of the function will still just say <code>F.xxx</code>.</p>
+    </section>
+</article>
+
+        </main>
+
+        <footer>
+            Site proudly generated by
+            <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+        </footer>
+    </body>
+</html>
