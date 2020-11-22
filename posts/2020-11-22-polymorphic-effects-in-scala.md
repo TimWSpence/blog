@@ -82,7 +82,7 @@ start/cancel/wait for fibers.
 def subprogram[F[_] : HttpClient : Spawn]: F[Unit] = ???
 ```
 
-We can deduce that this subprogram may make http calls and may maipulate fibers
+We can deduce that this subprogram may make http calls and may manipulate fibers
 and _nothing_ else.
 
 ## Writing your own effect typeclasses
@@ -107,6 +107,10 @@ object Spawn {
   }
 }
 ```
+
+Similarly we could write our own `Files[F]` typeclass if our program needs to
+perform file I/O, `Store[F, Foo]` if our program needs to persist `Foo`s to
+a database, etc
 
 ## Thinking more about constraining effects
 
