@@ -46,7 +46,7 @@
 <h2 id="cats-effect-3">Cats Effect 3</h2>
 <p>Fortunately this will soon be rectified with the release of cats effect 3! :) This pushes <code>Sync</code> and <code>Async</code> to the bottom of the typeclass hierarchy so that you can introduce other CE3 typeclasses into scope without losing the ability to reason about effects. For example <code>Spawn</code> is a typeclass that allows you to start/cancel/wait for fibers.</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb4-1" title="1"><span class="kw">def</span> subprogram[F[_] : HttpClient : Spawn]: F[Unit] = ???</a></code></pre></div>
-<p>We can deduce that this subprogram may make http calls and may maipulate fibers and <em>nothing</em> else.</p>
+<p>We can deduce that this subprogram may make http calls and may manipulate fibers and <em>nothing</em> else.</p>
 <h2 id="writing-your-own-effect-typeclasses">Writing your own effect typeclasses</h2>
 <p>At this point it’s worth noting that the new cats effect typeclasses aren’t particularly special (other than having sets of laws that ensure that they compose sensibly with other CE combinators). It’s entirely possible to build your own. For example, if we decided we couldn’t wait till the release of CE3 to have access to a <code>Spawn</code> typeclass that doesn’t break effectful reasoning by introducing <code>delay</code> into scope, we could write our own!</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb5-1" title="1"><span class="co">//Sketchy outline!</span></a>
@@ -60,6 +60,7 @@
 <a class="sourceLine" id="cb5-9" title="9">      <span class="kw">def</span> start[A](fa: F[A]): F[Fiber[F, A]] = F.<span class="fu">start</span>(fa)</a>
 <a class="sourceLine" id="cb5-10" title="10">  }</a>
 <a class="sourceLine" id="cb5-11" title="11">}</a></code></pre></div>
+<p>Similarly we could write our own <code>Files[F]</code> typeclass if our program needs to perform file I/O, <code>Store[F, Foo]</code> if our program needs to persist <code>Foo</code>s to a database, etc</p>
 <h2 id="thinking-more-about-constraining-effects">Thinking more about constraining effects</h2>
 <p>Hopefully that’s at least convinced you that there are concrete benefits to writing code with a polymorphic effect type. If you want to think more about this in a slightly more abstract setting. I <em>highly</em> recommend Runar’s classic talk <a href="https://www.youtube.com/watch?v=GqmsQeSzMdw">Constraints liberate, liberties contrain</a></p>
 <h2 id="postscript">Postscript</h2>
