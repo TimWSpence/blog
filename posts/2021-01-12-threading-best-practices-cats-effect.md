@@ -99,18 +99,158 @@ So we've seen that best performance is achieved when we dedicate use of the comp
 to evaluating `IO` fiber runloops and ensure that we shift _all_ blocking operations
 to a separate blocking threadpool. We've also seen that many things do not need to
 block a thread at all - cats effect provides semantic blocking abstractions for waiting
-for arbtirary conditions to be satisifed. Now it's time to see the details of how we achive
+for arbtirary conditions to be satisifed. Now it's time to see the details of how we achieve
 this in cats effect 2 and 3.
 
-explain fibers?
-## Semantic blocking
+## Cats Effect 2
 
-## Local reasoning
+CE2 provides a fixed execution context sized to the number of available cores for us
+to use for compute-bound work. Several abstractions are provided to facilitate
+shifting work to other pools.
 
-## CE2
+### Context shift
 
-context shift, blocker
+`ContextShift` is a pure representation of an execution context and looks a bit like this:
+```scala
+trait ContextShift[F[_]] {
+
+  def shift: F[Unit]
+
+  def evalOn[A](ec: ExecutionContext)(fa: F[A]): F[A] //Good
+
+}
+```
+
+Assume that an instance of this will be backed by some thread pool. `IOApp` provides an instance
+which is backed by the compute pool it provides.
+
+`evalOn` allows us to shift an operation onto another pool and have the continuation be
+automatically shifted back eg
+```scala
+CS.shift(blockingPool)(
+    IO(println("I run on the blocking pool"))
+  ) >> IO(println("I run on the pool that backs CS"))`
+```
+
+`shift` is a uni-directional shift of thread pool so that the continuation runs on the pool that
+backs the `ContextShift`
+```scala
+IO(println("I run on some pool")) >> CS.shift >> IO(println("I run on the pool that backs CS"))
+```
+
+### Blocker
+
+`Blocker` was introduced to provide an abstraction for our unbounded pool for blocking operations.
+It relies upon `ContextShift` for its actual behaviour and is simply a marker for a threadpool
+that is suitable for blocking operations.
+
+```scala
+trait Blocker {
+  def blockOn[F[_], A](fa: F[A])(implicit cs: ContextShift[F]): F[A]
+}
+```
+
+`blockOn` behaves exactly like `ContextShift#blockOn` - the provided `fa` will be run on the
+blocker's pool and then the continuation will run on the pool that backs `cs`
+
+### Local reasoning
+
+Unfortunately there are some problems with these abstractions - we lose the ability to reason
+locally about what thread pool effects are running on.
+
+```scala
+def prog(inner: IO[Unit]): IO[Unit] =
+  for {
+    _ <- IO(println("Running on the default pool"))
+    _ <- inner
+    _ <- IO(println("Uh oh! Where is this running?"))
+  } yield ()
+```
+
+The problem is that `inner` could be something like `randomCS.shift` in which case the
+second print will be run on whatever thread pool backs `randomCS`
+
+In fact, `shift` is _never_ safe for this reason and `evalOn` is only safe if it
+returns execution to the previous thread pool, rather than an arbitrary jump to
+the threadpool that backs whatever implicit `ContextShift` was in scope.
+
+What we need is the ability to locally change the threadpool with
+the guarantee that the continuation will be shifted to the previous
+pool aferwards. If you are familiar with `MonadReader`
+```scala
+trait MonadReader[F[_], R] {
+  def ask: F[R_] //get the current execution context
+  
+  def local[A](alter: R => R)(inner: F[A]): F[A] //run an inner effect with a different execution 
+                                                 //context and then restore the previous
+                                                 //execution context
+}
+```
+then you might see that this has exactly the semantics we need, where
+`local` is like `evalOn` in allowing us to locally change the
+execution context, but it will be restored to the previous value afterwards.
+
+### Obtaining a handle to the compute pool
+
+Another unfortunate wart is that it is very difficult to obtain a handle to `IOApp's`
+compute pool. This can be worked around with `IOApp.WithContext` but it is somewhat
+clunky, especially if you want to instantiate the same threadpool as `IOApp` would
+otherwise instantiate.
+
+```scala
+object Main extends IOApp.WithContext {
+
+  override protected def executionContextResource: Resource[SyncIO, ExecutionContext] =
+    instantiateSomeCustomThreadpoolHere()
+
+  override def run(args: List[String]): IO[ExitCode] = {
+    val computeEC = executionContext
+    program(computeEC)
+  }
+}
+```
 
 ## CE3
 
-blocking, interruptible, evalOn
+The good news is that Cats effect 3 fixes these things and makes other things nicer as well! :)
+Notably, `ContextShift` and `Blocker` are no more.
+
+### Spawn
+
+CE3 introduces a re-designed typeclass `Async`
+
+```scala
+trait Async[F[_]] {
+  def evalOn[A](fa: F[A], ec: ExecutionContext): F[A]
+
+  def executionContext: F[ExecutionContext]
+}
+```
+which has exactly the `MonadReader` semantics we discussed above. Note that the
+execution shifts back to the threadpool defined by Async#`executionContext`, rather
+than a non-local jump to the threadpool belonging to some implicit `ContextShift`.
+
+Also note that `Async[IO].executionContext` in `IOApp` will give us a handle to the
+compute pool without the `WithContext` machinery.
+
+### Blocking
+
+CE3 has a builtin `blocking` which will shift execution to an internal
+blocking threadpool and shift it back afterwards using `Async`.
+
+This means that we can simply write
+```scala
+IO.println("current pool") >> IO.blocking(println("blocking pool")) >> IO.println("current pool")
+```
+
+There is also an analogous operation `interruptible` which shifts to the blocking pool
+but will attempt to cancel the operation using `Thread#interrupt()` in the event that
+the fiber is canceled.
+
+work stealing pool
+
+
+## TODO
+explain fibers?
+local reasoning - context shift / blocker evalOn
+cooperative multi-tasking
