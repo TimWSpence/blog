@@ -3,7 +3,7 @@ title: Threading best practices in Cats Effect
 ---
 
 I frequently get asked what the best way to manage threadpools in Cats Effect is
-so this is my attempt to write a definitive answer that I can point to. My intention
+so this is my attempt to write a definitive explanation that I can point to. My intention
 is to cover both Cats Effect 2 and Cats Effect 3, although at the time of writing
 the latter is at milestone 5 so some details are subject to change. I'll endeavour to
 update this should that happen.
@@ -48,10 +48,36 @@ case class FlatMap[A, B](io: IO[B], f: B => IO[A]) extends IO[A]
 Of course this has no error handling, isn't stacksafe, doesn't support asynchronous effects, etc
 but it's close enough for illustrative purposes. The key thing to note is that `unsafeRun`
 is a tightly CPU-bound loop evaluating different layers of `IO`. The situation is just the same
-when we evaluate the real `IO` via one of the `unsafeRunX` methods or as part of an `IOApp`. Note
-as well that there will be one of these runloops for every `IO` fiber that we want to run.
-This means that we obtain maximum performance when all of our CPU threads are free to evaluate
-this runloop for one of our `IO` fibers. 
+when we evaluate the real `IO` via one of the `unsafeRunX` methods or as part of an `IOApp`. 
+
+### Fibers
+
+Of course we tend to have many logical threads of execution in our applications.
+Cats effect trivially supports this via lightweight `Fiber`s, each of which is an instance
+of the `IO` runloop. These can be created via `IO#start`, as well as various
+combinators like `IO#race`. It is important to note that this an implementation of
+[cooperative
+multi-tasking](https://en.wikipedia.org/wiki/Cooperative_multitasking) (as
+opposed to pre-emptive). In practice this means that it is actually possible for
+a fiber to take control of a CPU core and never give it back if it executes a
+tight CPU-bound loop like
+```scala
+def factorial(n: BigInt): IO[Int] = n match {
+  case 0 => IO.pure(1)
+  case n => factorial(n-1).flatMap {
+    m => m * n
+  }
+}
+
+factorial(10000)
+```
+
+If you have such a loop then you can insert a fairness boundary via `IO.shift` (CE2 but has other
+potential side-effects) or `IO.cede` (CE3).
+
+Note that the runloop-per-fiber model means that we obtain maximum performance
+when all of our CPU threads are free to evaluate this runloop for one of our
+`IO` fibers. 
 
 ### Thread blocking
 
@@ -190,6 +216,14 @@ then you might see that this has exactly the semantics we need, where
 `local` is like `evalOn` in allowing us to locally change the
 execution context, but it will be restored to the previous value afterwards.
 
+### Auto-yielding
+
+Auto-yielding is not supported in CE2 as yielding requires re-enqueuing the fiber
+on a global queue and waiting for it to be re-scheduled. This is too expensive
+to be inserted automatically. If you have a tight CPU-bound loop then you should
+insert `IO.shift` where appropriate whilst ensuring that the implicit `ContextShift`
+is the one that represents the compute pool.
+
 ### Obtaining a handle to the compute pool
 
 Another unfortunate wart is that it is very difficult to obtain a handle to `IOApp's`
@@ -247,10 +281,14 @@ There is also an analogous operation `interruptible` which shifts to the blockin
 but will attempt to cancel the operation using `Thread#interrupt()` in the event that
 the fiber is canceled.
 
-work stealing pool
+### Work-stealing pool
 
-
-## TODO
-explain fibers?
-local reasoning - context shift / blocker evalOn
-cooperative multi-tasking
+CE3 also has a very exciting custom work-stealing threadpool implementation. This has
+numerous benefits over the `FixedThreadpool` used in CE2:
+- It maintains a work queue per core rather than a single global one so contention
+  is dramatically reduced, especially with lots of cores
+- This means that we can implement thread affinity, where a fiber that yields is most
+  likely to be re-scheduled on the same thread. This makes yielding much cheaper
+  as if the fiber is immediately re-scheduled we don't even have to flush CPU caches
+- Consequently we can support auto-yielding where a fiber will insert an `IO.cede`
+  every fixed number of iterations of the runloop
