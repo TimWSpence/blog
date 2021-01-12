@@ -17,14 +17,14 @@ just give the executive summary. We are aiming for:
 - 1 or 2 high-priority threads for handling asynchronous I/O events, the handling of which should
   immediately be shifted to the compute pool
   
-The goal of this is to minimize the number of expensive thread context shifts and to maximize the
-amount of time that our compute pool is doing useful work.
+The goal of this is to minimize the number of expensive thread context shifts
+and to maximize the amount of time that our compute pool is doing useful work.
 
-It is also worth noting that `scala.concurrent.ExecutionContext.global` is a poor choice for your
-compute pool as its design assumes that there will be blocking operations performed on it and
-hence it allocates more threads. In addition, there is no way to stop libraries on your
-classpath from scheduling arbitrary code on it so it is a very unreliable basis for your
-compute pool.
+It is also worth noting that `scala.concurrent.ExecutionContext.global` is a
+poor choice for your compute pool as its fork-join design assumes that there
+will be blocking operations performed on it and hence it allocates more threads.
+In addition, there is no way to stop libraries on your classpath from scheduling
+arbitrary code on it so it is a very unreliable basis for your compute pool.
 
 ## The IO runloop
 
@@ -46,7 +46,7 @@ case class FlatMap[A, B](io: IO[B], f: B => IO[A]) extends IO[A]
 ```
 
 Of course this has no error handling, isn't stacksafe, doesn't support asynchronous effects, etc
-but it's close enough for illustrative purposes. The key thing to note is that `unsafeRun`
+but it's close enough for illustrative purposes. The key thing to note is that `unsafeRun()`
 is a tightly CPU-bound loop evaluating different layers of `IO`. The situation is just the same
 when we evaluate the real `IO` via one of the `unsafeRunX` methods or as part of an `IOApp`. 
 
@@ -69,11 +69,12 @@ def factorial(n: BigInt): IO[Int] = n match {
   }
 }
 
-factorial(10000)
+factorial(10000).unsafeRunSync()
 ```
 
 If you have such a loop then you can insert a fairness boundary via `IO.shift` (CE2 but has other
-potential side-effects) or `IO.cede` (CE3).
+potential side-effects) or `IO.cede` (CE3), which will give another fiber an opportunity to run on
+the thread.
 
 Note that the runloop-per-fiber model means that we obtain maximum performance
 when all of our CPU threads are free to evaluate this runloop for one of our
@@ -88,23 +89,24 @@ of that operation our capacity to evaluate `IO` fibers is _halved_. Run two such
 operations at the same time and your application effectively stops until one of
 those blocking calls completes.
 
-The solution to this is to shift the execution of the blocking operation to our unbounded, cached
-threadpool and then shift computation back to the compute pool once the blocking call has completed.
-We'll see code samples for this later as it is quite different between CE2 and CE3.
+The solution to this is to shift the execution of the blocking operation to our
+unbounded, cached threadpool and then shift computation back to the compute pool
+once the blocking call has completed.  We'll see code samples for this later as
+it is quite different between CE2 and CE3.
 
 ### Semantic blocking
 
 Of course, we do also need the ability to tell fibers to wait for conditions to
 be fulfilled. If we can't call thread blocking operations (eg Java/Scala builtin
-locks, semaphores, etc) then what can we do?  At this point we need to insist on a
-distinction between thread blocking operations (synchronous I/O, Java locks,
+locks, semaphores, etc) then what can we do?  At this point we need to insist on
+a distinction between thread blocking operations (synchronous I/O, Java locks,
 semaphores, etc as above) and _semantic_ blocking, where a fiber yields control
 of the thread it was running on and indicates that it should wait for a
 condition to be satisfied.
 
 Cats effect provides various APIs which have these semantics, such as `IO.sleep(duration)`.
 Indeed this is why you must never call `IO(Thread.sleep(duration))` instead, as this is a
-thread blocking operation, where as `IO.sleep` is only semantically blocking.
+thread blocking operation whereas `IO.sleep` is only semantically blocking.
 
 The building block for arbitrary semantic blocking is `Deferred`, which is a purely functional
 promise that can only be completed once
@@ -130,9 +132,9 @@ this in cats effect 2 and 3.
 
 ## Cats Effect 2
 
-CE2 provides a fixed execution context sized to the number of available cores for us
-to use for compute-bound work. Several abstractions are provided to facilitate
-shifting work to other pools.
+CE2 `IOApp` provides a fixed execution context sized to the number of available
+cores for us to use for compute-bound work. Several abstractions are provided to
+facilitate shifting work to other pools.
 
 ### Context shift
 
@@ -147,8 +149,8 @@ trait ContextShift[F[_]] {
 }
 ```
 
-Assume that an instance of this will be backed by some thread pool. `IOApp` provides an instance
-which is backed by the compute pool it provides.
+Assume that an instance of this will be backed by some thread pool. `IOApp`
+provides an instance which is backed by the default compute pool it provides.
 
 `evalOn` allows us to shift an operation onto another pool and have the continuation be
 automatically shifted back eg
@@ -177,7 +179,7 @@ trait Blocker {
 ```
 
 `blockOn` behaves exactly like `ContextShift#blockOn` - the provided `fa` will be run on the
-blocker's pool and then the continuation will run on the pool that backs `cs`
+blocker's pool and then the continuation will run on the pool that `cs` represents.
 
 ### Local reasoning
 
@@ -194,7 +196,7 @@ def prog(inner: IO[Unit]): IO[Unit] =
 ```
 
 The problem is that `inner` could be something like `randomCS.shift` in which case the
-second print will be run on whatever thread pool backs `randomCS`
+second print will be run on whatever thread pool `randomCS` represents.
 
 In fact, `shift` is _never_ safe for this reason and `evalOn` is only safe if it
 returns execution to the previous thread pool, rather than an arbitrary jump to
@@ -261,7 +263,7 @@ trait Async[F[_]] {
 }
 ```
 which has exactly the `MonadReader` semantics we discussed above. Note that the
-execution shifts back to the threadpool defined by Async#`executionContext`, rather
+execution shifts back to the threadpool defined by `Async#executionContext`, rather
 than a non-local jump to the threadpool belonging to some implicit `ContextShift`.
 
 Also note that `Async[IO].executionContext` in `IOApp` will give us a handle to the
@@ -291,4 +293,5 @@ numerous benefits over the `FixedThreadpool` used in CE2:
   likely to be re-scheduled on the same thread. This makes yielding much cheaper
   as if the fiber is immediately re-scheduled we don't even have to flush CPU caches
 - Consequently we can support auto-yielding where a fiber will insert an `IO.cede`
-  every fixed number of iterations of the runloop
+  every fixed number of iterations of the runloop, stopping a rogue cpu-bound fiber
+  from inadvertently pinning a CPU core
