@@ -12,12 +12,13 @@ I'll endeavour to update this should that happen.
 
 The high-level goals of threading are covered in detail by [Daniel's gist](https://gist.github.com/djspiewak/46b543800958cf61af6efa8e072bfd5c) so I'll
 just give the executive summary. We are aiming for:
-- A single thread pool of roughly the number of available processors for compute-based operations
-  (depending on your application you may get better performance by leaving one or two cores
-  free for GC, etc)
-- An unbounded, cached threadpool for blocking operations
-- 1 or 2 high-priority threads for handling asynchronous I/O events, the handling of which should
-  immediately be shifted to the compute pool
+
+ * A single thread pool of roughly the number of available processors for compute-based operations
+   (depending on your application you may get better performance by leaving one or two cores
+   free for GC, etc)
+ * An unbounded, cached threadpool for blocking operations
+ * 1 or 2 high-priority threads for handling asynchronous I/O events, the handling of which should
+   immediately be shifted to the compute pool
   
 The goal of this is to minimize the number of expensive thread context shifts
 and to maximize the amount of time that our compute pool is doing useful work.
