@@ -102,7 +102,7 @@
 <a class="sourceLine" id="cb7-3" title="3">}</a>
 <a class="sourceLine" id="cb7-4" title="4"></a>
 <a class="sourceLine" id="cb7-5" title="5">blocker.<span class="fu">blockOn</span>(<span class="fu">IO</span>(readFile)) &gt;&gt; <span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;Shifted back to the pool that CS represents&quot;</span>))</a></code></pre></div>
-<p><code>blockOn</code> behaves exactly like <code>ContextShift#blockOn</code> - the provided <code>fa</code> will be run on the blocker’s pool and then the continuation will run on the pool that <code>cs</code> represents.</p>
+<p><code>blockOn</code> behaves exactly like <code>ContextShift#evalOn</code> - the provided <code>fa</code> will be run on the blocker’s pool and then the continuation will run on the pool that <code>cs</code> represents.</p>
 <p>A common pattern in libraries for CE2 is to have an API which asks for a <code>Blocker</code> and an implicit <code>ContextShift</code></p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb8-1" title="1"><span class="kw">def</span> api[F[_] : ContextShift](blocker: Blocker): F[Api]</a></code></pre></div>
 <p>In this case you <em>must</em> provide the <code>ContextShift</code> given to you by <code>IOApp</code> (unless you’re absolutely sure you know what you’re doing) as the expectation of the library authors is that they can use that <code>ContextShift</code> to shift execution back to the compute pool after performing any blocking operations on the provided <code>Blocker</code>.</p>
