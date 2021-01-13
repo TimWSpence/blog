@@ -56,13 +56,14 @@ when we evaluate the real `IO` via one of the `unsafeRunX` methods or as part of
 
 Of course we tend to have many logical threads of execution in our applications.
 Cats effect trivially supports this via lightweight `Fiber`s, each of which is
-an instance of the `IO` runloop. These can be created via `IO#start`, as well as
-various combinators like `IO#race`. It is important to note that this an
-implementation of [cooperative
+an instance of the `IO` runloop. These are run `m:n` on the OS-level threads (so
+there is no direct mapping between fibers and threads) and can be created via
+`IO#start`, as well as various combinators like `IO#race`. It is important to
+note that this [cooperative
 multi-tasking](https://en.wikipedia.org/wiki/Cooperative_multitasking) (as
 opposed to pre-emptive) so it is the responsibility of a fiber to yield control
 of the CPU by suspending its runloop periodically. In practice this is rarely an
-issue as fibers automatically yield at asynchronous boundaries (I/O, etc) but it
+issue as fibers automatically yield at asynchronous boundaries (eg I/O) but it
 does means that it is actually possible for a fiber to take control of a CPU
 core and never give it back if it executes a tight CPU-bound loop like
 
