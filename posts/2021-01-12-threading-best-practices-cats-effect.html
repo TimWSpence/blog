@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>My Hakyll Blog - Threading best practices in Cats Effect</title>
+        <link rel="stylesheet" href="../stylesheet.css" />
+    </head>
+    <body>
+        <header>
+            <nav>
+                <a href="../">Home</a>
+                <a href="../about.html">About</a>
+                <a href="../archive.html">Archive</a>
+            </nav>
+        </header>
+
+        <main role="main">
+            <h1>Threading best practices in Cats Effect</h1>
+            <article>
+    <section class="header">
+        Posted on January 12, 2021
+        
+    </section>
+    <section>
+        <p>I regularly get asked what the best way to manage threadpools in Cats Effect is so this is my attempt to write a consistent explanation that I can point to. My intention is to cover both Cats Effect 2 and Cats Effect 3, although at the time of writing the latter is at milestone 5 so some details are subject to change. I’ll endeavour to update this should that happen.</p>
+<h2 id="high-level-goals">High-level goals</h2>
+<p>The high-level goals of threading are covered in detail by <a href="https://gist.github.com/djspiewak/46b543800958cf61af6efa8e072bfd5c">Daniel’s gist</a> so I’ll just give the executive summary. We are aiming for: - A single thread pool of roughly the number of available processors for compute-based operations (depending on your application you may get better performance by leaving one or two cores free for GC, etc) - An unbounded, cached threadpool for blocking operations - 1 or 2 high-priority threads for handling asynchronous I/O events, the handling of which should immediately be shifted to the compute pool</p>
+<p>The goal of this is to minimize the number of expensive thread context shifts and to maximize the amount of time that our compute pool is doing useful work.</p>
+<p>It is also worth noting that <code>scala.concurrent.ExecutionContext.global</code> is a poor choice for your compute pool as its fork-join design assumes that there will be blocking operations performed on it and hence it allocates more threads. In addition, there is no way to stop libraries on your classpath from scheduling arbitrary code on it so it is a very unreliable basis for your compute pool.</p>
+<h2 id="the-io-runloop">The IO runloop</h2>
+<p>A simplified <code>IO</code> might look something like this:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb1-1" title="1"><span class="kw">sealed</span> <span class="kw">abstract</span> <span class="kw">class</span> IO[A] {</a>
+<a class="sourceLine" id="cb1-2" title="2">  <span class="kw">def</span> flatMap[B](f: A =&gt; IO[B]): IO[B] = <span class="fu">FlatMap</span>(<span class="kw">this</span>, f)</a>
+<a class="sourceLine" id="cb1-3" title="3">  </a>
+<a class="sourceLine" id="cb1-4" title="4">  <span class="kw">def</span> <span class="fu">unsafeRun</span>(): A = <span class="kw">this</span> <span class="kw">match</span> {</a>
+<a class="sourceLine" id="cb1-5" title="5">    <span class="kw">case</span> <span class="fu">Pure</span>(a) =&gt; a</a>
+<a class="sourceLine" id="cb1-6" title="6">    <span class="kw">case</span> <span class="fu">Suspend</span>(thunk) =&gt; <span class="fu">thunk</span>()</a>
+<a class="sourceLine" id="cb1-7" title="7">    <span class="kw">case</span> <span class="fu">FlatMap</span>(io, f) =&gt; <span class="fu">f</span>(io.<span class="fu">unsafeRun</span>()).<span class="fu">unsafeRun</span>()</a>
+<a class="sourceLine" id="cb1-8" title="8">  }</a>
+<a class="sourceLine" id="cb1-9" title="9">}</a>
+<a class="sourceLine" id="cb1-10" title="10"></a>
+<a class="sourceLine" id="cb1-11" title="11"><span class="kw">case</span> <span class="kw">class</span> Pure[A](a: A) <span class="kw">extends</span> IO[A]</a>
+<a class="sourceLine" id="cb1-12" title="12"><span class="kw">case</span> <span class="kw">class</span> Suspend[A](thunk: () =&gt; A) <span class="kw">extends</span> IO[A]</a>
+<a class="sourceLine" id="cb1-13" title="13"><span class="kw">case</span> <span class="kw">class</span> FlatMap[A, B](io: IO[B], f: B =&gt; IO[A]) <span class="kw">extends</span> IO[A]</a></code></pre></div>
+<p>Of course this has no error handling, isn’t stacksafe, doesn’t support asynchronous effects, etc but it’s close enough for illustrative purposes. The key thing to note is that <code>unsafeRun()</code> is a tightly CPU-bound loop evaluating different layers of <code>IO</code>. The situation is just the same when we evaluate the real <code>IO</code> via one of the <code>unsafeRunX</code> methods or as part of an <code>IOApp</code>.</p>
+<h3 id="fibers">Fibers</h3>
+<p>Of course we tend to have many logical threads of execution in our applications. Cats effect trivially supports this via lightweight <code>Fiber</code>s, each of which is an instance of the <code>IO</code> runloop. These can be created via <code>IO#start</code>, as well as various combinators like <code>IO#race</code>. It is important to note that this an implementation of <a href="https://en.wikipedia.org/wiki/Cooperative_multitasking">cooperative multi-tasking</a> (as opposed to pre-emptive) so it is the responsibility of a fiber to yield control of the CPU by suspending its runloop periodically. In practice this is rarely an issue as fibers automatically yield at asynchronous boundaries (I/O, etc) but it does means that it is actually possible for a fiber to take control of a CPU core and never give it back if it executes a tight CPU-bound loop like</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb2-1" title="1"><span class="kw">def</span> <span class="fu">factorial</span>(n: BigInt): IO[Int] = n <span class="kw">match</span> {</a>
+<a class="sourceLine" id="cb2-2" title="2">  <span class="kw">case</span> <span class="dv">0</span> =&gt; IO.<span class="fu">pure</span>(<span class="dv">1</span>)</a>
+<a class="sourceLine" id="cb2-3" title="3">  <span class="kw">case</span> n =&gt; <span class="fu">factorial</span>(n<span class="dv">-1</span>).<span class="fu">flatMap</span> {</a>
+<a class="sourceLine" id="cb2-4" title="4">    m =&gt; m * n</a>
+<a class="sourceLine" id="cb2-5" title="5">  }</a>
+<a class="sourceLine" id="cb2-6" title="6">}</a>
+<a class="sourceLine" id="cb2-7" title="7"></a>
+<a class="sourceLine" id="cb2-8" title="8"><span class="fu">factorial</span>(<span class="dv">10000</span>).<span class="fu">unsafeRunSync</span>()</a></code></pre></div>
+<p>If you have such a loop then you can insert a fairness boundary via <code>IO.shift</code> (CE2 but has other potential side-effects) or <code>IO.cede</code> (CE3), which will give another fiber an opportunity to run on the thread.</p>
+<p>Note that the runloop-per-fiber model means that we obtain maximum performance when all of our CPU threads are free to evaluate this runloop for one of our <code>IO</code> fibers.</p>
+<h3 id="thread-blocking">Thread blocking</h3>
+<p>A direct consequence of the above is that running blocking code on our compute pool is <em>very</em> bad. If we’re running on a node with 2 CPUs and we evaluate a blocking call like <code>IO(Source.fromFile(path).getLines())</code> then for the duration of that operation our capacity to evaluate <code>IO</code> fibers is <em>halved</em>. Run two such operations at the same time and your application effectively stops until one of those blocking calls completes.</p>
+<p>The solution to this is to shift the execution of the blocking operation to our unbounded, cached threadpool and then shift computation back to the compute pool once the blocking call has completed. We’ll see code samples for this later as it is quite different between CE2 and CE3.</p>
+<h3 id="semantic-blocking">Semantic blocking</h3>
+<p>Of course, we do also need the ability to tell fibers to wait for conditions to be fulfilled. If we can’t call thread blocking operations (eg Java/Scala builtin locks, semaphores, etc) then what can we do? It seems we need a notion of <em>semantic</em> blocking, where the execution of a fiber is suspended and control of the thread it was running on is yielded.</p>
+<p>Cats effect provides various APIs which have these semantics, such as <code>IO.sleep(duration)</code>. Indeed this is why you must never call <code>IO(Thread.sleep(duration))</code> instead, as this is a thread blocking operation whereas <code>IO.sleep</code> is only semantically blocking.</p>
+<p>The building block for arbitrary semantic blocking is <code>Deferred</code>, which is a purely functional promise that can only be completed once</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb3-1" title="1"><span class="kw">trait</span> Deferred[F[_], A] {</a>
+<a class="sourceLine" id="cb3-2" title="2">  <span class="kw">def</span> get: F[A]</a>
+<a class="sourceLine" id="cb3-3" title="3">  </a>
+<a class="sourceLine" id="cb3-4" title="4">  <span class="kw">def</span> <span class="fu">complete</span>(a: A): F[Unit]</a>
+<a class="sourceLine" id="cb3-5" title="5">}</a></code></pre></div>
+<p><code>Deferred#get</code> is semantically blocking until <code>Deferred#complete</code> is called and cats effect provides many more semantically blocking abstractions like semaphores that are built on top of this.</p>
+<h2 id="summary-thus-far">Summary thus far</h2>
+<p>So we’ve seen that best performance is achieved when we dedicate use of the compute pool to evaluating <code>IO</code> fiber runloops and ensure that we shift <em>all</em> blocking operations to a separate blocking threadpool. We’ve also seen that many things do not need to block a thread at all - cats effect provides semantic blocking abstractions for waiting for arbtirary conditions to be satisifed. Now it’s time to see the details of how we achieve this in cats effect 2 and 3.</p>
+<h2 id="cats-effect-2">Cats Effect 2</h2>
+<p>CE2 <code>IOApp</code> provides a fixed execution context sized to the number of available cores for us to use for compute-bound work. This maintains a global queue of runnables awaiting scheduling. Several abstractions are provided to facilitate shifting work to other pools.</p>
+<h3 id="context-shift">Context shift</h3>
+<p><code>ContextShift</code> is a pure representation of a threadpool and looks a bit like this:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb4-1" title="1"><span class="kw">trait</span> ContextShift[F[_]] {</a>
+<a class="sourceLine" id="cb4-2" title="2"></a>
+<a class="sourceLine" id="cb4-3" title="3">  <span class="kw">def</span> shift: F[Unit]</a>
+<a class="sourceLine" id="cb4-4" title="4"></a>
+<a class="sourceLine" id="cb4-5" title="5">  <span class="kw">def</span> evalOn[A](ec: ExecutionContext)(fa: F[A]): F[A] <span class="co">//Good</span></a>
+<a class="sourceLine" id="cb4-6" title="6"></a>
+<a class="sourceLine" id="cb4-7" title="7">}</a></code></pre></div>
+<p>An instance of this will be backed by some thread pool. <code>IOApp</code> provides an instance which is backed by the default compute pool it provides.</p>
+<p><code>evalOn</code> allows us to shift an operation onto another pool and have the continuation be automatically shifted back eg</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb5-1" title="1">CS.<span class="fu">shift</span>(blockingPool)(</a>
+<a class="sourceLine" id="cb5-2" title="2">    <span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;I run on the blocking pool&quot;</span>))</a>
+<a class="sourceLine" id="cb5-3" title="3">  ) &gt;&gt; <span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;I am shifted onto the pool that CS represents&quot;</span>))`</a></code></pre></div>
+<p><code>shift</code> is a uni-directional shift of thread pool so that the continuation runs on the pool that the <code>ContextShift</code> represents</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb6-1" title="1"><span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;I run on some pool&quot;</span>)) &gt;&gt; CS.<span class="fu">shift</span> &gt;&gt; <span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;I run on the pool that CS represents&quot;</span>))</a></code></pre></div>
+<h3 id="blocker">Blocker</h3>
+<p><code>Blocker</code> was introduced to provide an abstraction for our unbounded pool for blocking operations. It relies upon <code>ContextShift</code> for its actual behaviour and is simply a marker for a threadpool that is suitable for blocking operations.</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb7-1" title="1"><span class="kw">trait</span> Blocker {</a>
+<a class="sourceLine" id="cb7-2" title="2">  <span class="kw">def</span> blockOn[F[_], A](fa: F[A])(<span class="kw">implicit</span> cs: ContextShift[F]): F[A]</a>
+<a class="sourceLine" id="cb7-3" title="3">}</a>
+<a class="sourceLine" id="cb7-4" title="4"></a>
+<a class="sourceLine" id="cb7-5" title="5">blocker.<span class="fu">blockOn</span>(<span class="fu">IO</span>(readFile)) &gt;&gt; <span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;Shifted back to the pool that CS represents&quot;</span>))</a></code></pre></div>
+<p><code>blockOn</code> behaves exactly like <code>ContextShift#blockOn</code> - the provided <code>fa</code> will be run on the blocker’s pool and then the continuation will run on the pool that <code>cs</code> represents.</p>
+<p>A common pattern in libraries for CE2 is to have an API which asks for a <code>Blocker</code> and an implicit <code>ContextShift</code></p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb8-1" title="1"><span class="kw">def</span> api[F[_] : ContextShift](blocker: Blocker): F[Api]</a></code></pre></div>
+<p>In this case you <em>must</em> provide the <code>ContextShift</code> given to you by <code>IOApp</code> (unless you’re absolutely sure you know what you’re doing) as the expectation of the library authors is that they can use that <code>ContextShift</code> to shift execution back to the compute pool after performing any blocking operations on the provided <code>Blocker</code>.</p>
+<h3 id="local-reasoning">Local reasoning</h3>
+<p>Unfortunately there are some problems with these abstractions - we lose the ability to reason locally about what thread pool effects are running on.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb9-1" title="1"><span class="kw">def</span> <span class="fu">prog</span>(inner: IO[Unit]): IO[Unit] =</a>
+<a class="sourceLine" id="cb9-2" title="2">  <span class="kw">for</span> {</a>
+<a class="sourceLine" id="cb9-3" title="3">    _ &lt;- <span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;Running on the default pool&quot;</span>))</a>
+<a class="sourceLine" id="cb9-4" title="4">    _ &lt;- inner</a>
+<a class="sourceLine" id="cb9-5" title="5">    _ &lt;- <span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;Uh oh! Where is this running?&quot;</span>))</a>
+<a class="sourceLine" id="cb9-6" title="6">  } <span class="kw">yield</span> ()</a></code></pre></div>
+<p>The problem is that <code>inner</code> could be something like <code>randomCS.shift</code> in which case the continuation (the second print) will be run on whatever thread pool <code>randomCS</code> represents.</p>
+<p>In fact, <code>shift</code> is <em>never</em> safe for this reason and <code>evalOn</code> is only safe if the <code>ContextShift</code> in implicit scope represents the threadpool that we were running on before <code>evalOn</code> shifted so that we shift back to where we were executing before. Nested <code>evalOn</code> is also prone to non-intuitive behaviour - see <a href="https://gist.github.com/TimWSpence/c0879b00936f495fb53c51ef15227ad3">this gist</a> for one such example.</p>
+<p>What we need is the ability to locally change the threadpool with the guarantee that the continuation will be shifted to the previous pool afterwards. If you are familiar with <code>MonadReader</code></p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb10-1" title="1"><span class="kw">trait</span> MonadReader[F[_], R] {</a>
+<a class="sourceLine" id="cb10-2" title="2">  <span class="kw">def</span> ask: F[R_] <span class="co">//get the current execution context</span></a>
+<a class="sourceLine" id="cb10-3" title="3">  </a>
+<a class="sourceLine" id="cb10-4" title="4">  <span class="kw">def</span> local[A](alter: R =&gt; R)(inner: F[A]): F[A] <span class="co">//run an inner effect with a different execution </span></a>
+<a class="sourceLine" id="cb10-5" title="5">                                                 <span class="co">//context and then restore the previous</span></a>
+<a class="sourceLine" id="cb10-6" title="6">                                                 <span class="co">//execution context</span></a>
+<a class="sourceLine" id="cb10-7" title="7">}</a></code></pre></div>
+<p>then you might see that this has exactly the semantics we need, where <code>local</code> is like <code>evalOn</code> in allowing us to locally change the execution context, but it will be restored to the previous value afterwards.</p>
+<h3 id="auto-yielding">Auto-yielding</h3>
+<p>Auto-yielding is the automatic insertion of fiber yields into the runloop to ensure that a single fiber does not hog a CPU core and is not supported in CE2 as yielding requires re-enqueuing the fiber on a global queue and waiting for it to be re-scheduled. This is too expensive to be inserted automatically as the global queue requires coordination between the CPU cores to access this shared resource and will also result in CPU core-local caches being invalidated. If you have a tight CPU-bound loop then you should insert <code>IO.shift</code> where appropriate whilst ensuring that the implicit <code>ContextShift</code> is the one that represents the current execution context (so you don’t accidentally shift the execution to another pool).</p>
+<h3 id="obtaining-a-handle-to-the-compute-pool">Obtaining a handle to the compute pool</h3>
+<p>Another unfortunate wart is that it is very difficult to obtain a handle to <code>IOApp's</code> compute pool. This can be worked around with <code>IOApp.WithContext</code> but it is somewhat clunky, especially if you want to instantiate the same threadpool as <code>IOApp</code> would otherwise instantiate.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb11-1" title="1"><span class="kw">object</span> Main <span class="kw">extends</span> IOApp.<span class="fu">WithContext</span> {</a>
+<a class="sourceLine" id="cb11-2" title="2"></a>
+<a class="sourceLine" id="cb11-3" title="3">  <span class="kw">override</span> <span class="kw">protected</span> <span class="kw">def</span> executionContextResource: Resource[SyncIO, ExecutionContext] =</a>
+<a class="sourceLine" id="cb11-4" title="4">    <span class="fu">instantiateSomeCustomThreadpoolHere</span>()</a>
+<a class="sourceLine" id="cb11-5" title="5"></a>
+<a class="sourceLine" id="cb11-6" title="6">  <span class="kw">override</span> <span class="kw">def</span> <span class="fu">run</span>(args: List[String]): IO[ExitCode] = {</a>
+<a class="sourceLine" id="cb11-7" title="7">    <span class="kw">val</span> computeEC = executionContext</a>
+<a class="sourceLine" id="cb11-8" title="8">    <span class="fu">program</span>(computeEC)</a>
+<a class="sourceLine" id="cb11-9" title="9">  }</a>
+<a class="sourceLine" id="cb11-10" title="10">}</a></code></pre></div>
+<h2 id="ce3">CE3</h2>
+<p>The good news is that Cats effect 3 fixes these things and makes other things nicer as well! :) Notably, <code>ContextShift</code> and <code>Blocker</code> are no more.</p>
+<h3 id="spawn">Spawn</h3>
+<p>CE3 introduces a re-designed typeclass <code>Async</code></p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb12-1" title="1"><span class="kw">trait</span> Async[F[_]] {</a>
+<a class="sourceLine" id="cb12-2" title="2">  <span class="kw">def</span> evalOn[A](fa: F[A], ec: ExecutionContext): F[A]</a>
+<a class="sourceLine" id="cb12-3" title="3"></a>
+<a class="sourceLine" id="cb12-4" title="4">  <span class="kw">def</span> executionContext: F[ExecutionContext]</a>
+<a class="sourceLine" id="cb12-5" title="5">}</a></code></pre></div>
+<p>which has exactly the <code>MonadReader</code> semantics we discussed above. Note that the execution shifts back to the threadpool defined by <code>Async#executionContext</code>.</p>
+<p>Also note that <code>Async[IO].executionContext</code> in <code>IOApp</code> will give us a handle to the compute pool without the <code>WithContext</code> machinery.</p>
+<h3 id="blocking">Blocking</h3>
+<p>CE3 has a builtin <code>blocking</code> which will shift execution to an internal blocking threadpool and shift it back afterwards using <code>Async</code>.</p>
+<p>This means that we can simply write</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb13-1" title="1">IO.<span class="fu">println</span>(<span class="st">&quot;current pool&quot;</span>) &gt;&gt; IO.<span class="fu">blocking</span>(<span class="fu">println</span>(<span class="st">&quot;blocking pool&quot;</span>)) &gt;&gt; IO.<span class="fu">println</span>(<span class="st">&quot;current pool&quot;</span>)</a></code></pre></div>
+<p>There is also a similar operation <code>interruptible</code> which shifts to the blocking pool but will also attempt to cancel the operation using <code>Thread#interrupt()</code> in the event that the fiber is canceled.</p>
+<h3 id="work-stealing-pool">Work-stealing pool</h3>
+<p>CE3 also has a very exciting custom work-stealing threadpool implementation. This has numerous benefits over the <code>FixedThreadpool</code> used in CE2: - It maintains a work queue per core rather than a single global one so contention is dramatically reduced, especially with lots of cores - This means that we can implement thread affinity, where a fiber that yields is most likely to be re-scheduled on the same thread. This makes yielding much cheaper as if the fiber is immediately re-scheduled we don’t even have to flush CPU caches - Consequently we can support auto-yielding where a fiber will insert an <code>IO.cede</code> every fixed number of iterations of the runloop, stopping a rogue cpu-bound fiber from inadvertently pinning a CPU core</p>
+    </section>
+</article>
+
+        </main>
+
+        <footer>
+            Site proudly generated by
+            <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+        </footer>
+    </body>
+</html>
