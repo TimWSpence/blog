@@ -326,14 +326,15 @@ the event that the fiber is canceled.
 
 CE3 also has a very exciting custom work-stealing threadpool implementation. This has
 numerous benefits over the `FixedThreadpool` used in CE2:
-- It maintains a work queue per core rather than a single global one so contention
-  is dramatically reduced, especially with lots of cores
-- This means that we can implement thread affinity, where a fiber that yields is most
-  likely to be re-scheduled on the same thread. This makes yielding much cheaper
-  as if the fiber is immediately re-scheduled we don't even have to flush CPU caches
-- Consequently we can support auto-yielding where a fiber will insert an `IO.cede`
-  every fixed number of iterations of the runloop, stopping a rogue cpu-bound fiber
-  from inadvertently pinning a CPU core
+
+ * It maintains a work queue per core rather than a single global one so contention
+   is dramatically reduced, especially with lots of cores
+ * This means that we can implement thread affinity, where a fiber that yields is most
+   likely to be re-scheduled on the same thread. This makes yielding much cheaper
+   as if the fiber is immediately re-scheduled we don't even have to flush CPU caches
+ * Consequently we can support auto-yielding where a fiber will insert an `IO.cede`
+   every fixed number of iterations of the runloop, stopping a rogue cpu-bound fiber
+   from inadvertently pinning a CPU core
 
 ## And that's it!
 
