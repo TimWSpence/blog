@@ -26,7 +26,12 @@
     <section>
         <p>I regularly get asked what the best way to manage threadpools in Cats Effect is so this is my attempt to write a consistent explanation that I can point to. My intention is to cover both Cats Effect 2 and Cats Effect 3, although at the time of writing the latter is at milestone 5 so some details are subject to change. I’ll endeavour to update this should that happen.</p>
 <h2 id="high-level-goals">High-level goals</h2>
-<p>The high-level goals of threading are covered in detail by <a href="https://gist.github.com/djspiewak/46b543800958cf61af6efa8e072bfd5c">Daniel’s gist</a> so I’ll just give the executive summary. We are aiming for: - A single thread pool of roughly the number of available processors for compute-based operations (depending on your application you may get better performance by leaving one or two cores free for GC, etc) - An unbounded, cached threadpool for blocking operations - 1 or 2 high-priority threads for handling asynchronous I/O events, the handling of which should immediately be shifted to the compute pool</p>
+<p>The high-level goals of threading are covered in detail by <a href="https://gist.github.com/djspiewak/46b543800958cf61af6efa8e072bfd5c">Daniel’s gist</a> so I’ll just give the executive summary. We are aiming for:</p>
+<ul>
+<li>A single thread pool of roughly the number of available processors for compute-based operations (depending on your application you may get better performance by leaving one or two cores free for GC, etc)</li>
+<li>An unbounded, cached threadpool for blocking operations</li>
+<li>1 or 2 high-priority threads for handling asynchronous I/O events, the handling of which should immediately be shifted to the compute pool</li>
+</ul>
 <p>The goal of this is to minimize the number of expensive thread context shifts and to maximize the amount of time that our compute pool is doing useful work.</p>
 <p>It is also worth noting that <code>scala.concurrent.ExecutionContext.global</code> is a poor choice for your compute pool as its fork-join design assumes that there will be blocking operations performed on it and hence it allocates more threads. In addition, there is no way to stop libraries on your classpath from scheduling arbitrary code on it so it is a very unreliable basis for your compute pool.</p>
 <h2 id="the-io-runloop">The IO runloop</h2>
