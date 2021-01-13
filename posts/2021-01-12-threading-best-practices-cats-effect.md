@@ -3,10 +3,11 @@ title: Threading best practices in Cats Effect
 ---
 
 I regularly get asked what the best way to manage threadpools in Cats Effect is
-so this is my attempt to write a consistent explanation that I can point to. My
-intention is to cover both Cats Effect 2 and Cats Effect 3, although at the time
-of writing the latter is at milestone 5 so some details are subject to change.
-I'll endeavour to update this should that happen.
+and what `ContextShift` does so this is my attempt to write a consistent
+explanation that I can point to. My intention is to cover both Cats Effect 2 and
+Cats Effect 3, although at the time of writing the latter is at milestone 5 so
+some details are subject to change.  I'll endeavour to update this should that
+happen.
 
 ## High-level goals
 
