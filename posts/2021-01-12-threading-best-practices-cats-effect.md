@@ -152,7 +152,7 @@ trait ContextShift[F[_]] {
 
   def shift: F[Unit]
 
-  def evalOn[A](ec: ExecutionContext)(fa: F[A]): F[A] //Good
+  def evalOn[A](ec: ExecutionContext)(fa: F[A]): F[A]
 
 }
 ```
@@ -226,10 +226,10 @@ case the continuation (the second print) will be run on whatever thread pool
 
 In fact, `shift` is _never_ safe for this reason and `evalOn` is only safe if
 the `ContextShift` in implicit scope represents the threadpool that we were
-running on before `evalOn` shifted so that we shift back to where we were
-executing before. Nested `evalOn` is also prone to non-intuitive behaviour - see
-[this gist](https://gist.github.com/TimWSpence/c0879b00936f495fb53c51ef15227ad3)
-for one such example.
+running on before so that we shift back to where we were executing before.
+Nested `evalOn` is also prone to non-intuitive behaviour - see [this
+gist](https://gist.github.com/TimWSpence/c0879b00936f495fb53c51ef15227ad3) for
+one such example.
 
 What we need is the ability to locally change the threadpool with
 the guarantee that the continuation will be shifted to the previous
@@ -282,9 +282,9 @@ object Main extends IOApp.WithContext {
 }
 ```
 
-## CE3
+## Cats Effect 3
 
-The good news is that Cats effect 3 fixes these things and makes other things nicer as well! :)
+The good news is that CE3 fixes these things and makes other things nicer as well! :)
 Notably, `ContextShift` and `Blocker` are no more.
 
 ### Spawn
@@ -331,3 +331,8 @@ numerous benefits over the `FixedThreadpool` used in CE2:
 - Consequently we can support auto-yielding where a fiber will insert an `IO.cede`
   every fixed number of iterations of the runloop, stopping a rogue cpu-bound fiber
   from inadvertently pinning a CPU core
+
+## And that's it!
+
+CE3 drastically simplifies threadpool usage and removes a number of significant
+gotchas, whilst significantly improving performance. Bring on the release!
