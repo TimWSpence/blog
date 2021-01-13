@@ -80,7 +80,7 @@
 <a class="sourceLine" id="cb4-2" title="2"></a>
 <a class="sourceLine" id="cb4-3" title="3">  <span class="kw">def</span> shift: F[Unit]</a>
 <a class="sourceLine" id="cb4-4" title="4"></a>
-<a class="sourceLine" id="cb4-5" title="5">  <span class="kw">def</span> evalOn[A](ec: ExecutionContext)(fa: F[A]): F[A] <span class="co">//Good</span></a>
+<a class="sourceLine" id="cb4-5" title="5">  <span class="kw">def</span> evalOn[A](ec: ExecutionContext)(fa: F[A]): F[A]</a>
 <a class="sourceLine" id="cb4-6" title="6"></a>
 <a class="sourceLine" id="cb4-7" title="7">}</a></code></pre></div>
 <p>An instance of this will be backed by some thread pool. <code>IOApp</code> provides an instance which is backed by the default compute pool it provides.</p>
@@ -110,7 +110,7 @@
 <a class="sourceLine" id="cb9-5" title="5">    _ &lt;- <span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;Uh oh! Where is this running?&quot;</span>))</a>
 <a class="sourceLine" id="cb9-6" title="6">  } <span class="kw">yield</span> ()</a></code></pre></div>
 <p>The problem is that <code>inner</code> could be something like <code>randomCS.shift</code> in which case the continuation (the second print) will be run on whatever thread pool <code>randomCS</code> represents.</p>
-<p>In fact, <code>shift</code> is <em>never</em> safe for this reason and <code>evalOn</code> is only safe if the <code>ContextShift</code> in implicit scope represents the threadpool that we were running on before <code>evalOn</code> shifted so that we shift back to where we were executing before. Nested <code>evalOn</code> is also prone to non-intuitive behaviour - see <a href="https://gist.github.com/TimWSpence/c0879b00936f495fb53c51ef15227ad3">this gist</a> for one such example.</p>
+<p>In fact, <code>shift</code> is <em>never</em> safe for this reason and <code>evalOn</code> is only safe if the <code>ContextShift</code> in implicit scope represents the threadpool that we were running on before so that we shift back to where we were executing before. Nested <code>evalOn</code> is also prone to non-intuitive behaviour - see <a href="https://gist.github.com/TimWSpence/c0879b00936f495fb53c51ef15227ad3">this gist</a> for one such example.</p>
 <p>What we need is the ability to locally change the threadpool with the guarantee that the continuation will be shifted to the previous pool afterwards. If you are familiar with <code>MonadReader</code></p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb10-1" title="1"><span class="kw">trait</span> MonadReader[F[_], R] {</a>
 <a class="sourceLine" id="cb10-2" title="2">  <span class="kw">def</span> ask: F[R_] <span class="co">//get the current execution context</span></a>
@@ -134,8 +134,8 @@
 <a class="sourceLine" id="cb11-8" title="8">    <span class="fu">program</span>(computeEC)</a>
 <a class="sourceLine" id="cb11-9" title="9">  }</a>
 <a class="sourceLine" id="cb11-10" title="10">}</a></code></pre></div>
-<h2 id="ce3">CE3</h2>
-<p>The good news is that Cats effect 3 fixes these things and makes other things nicer as well! :) Notably, <code>ContextShift</code> and <code>Blocker</code> are no more.</p>
+<h2 id="cats-effect-3">Cats Effect 3</h2>
+<p>The good news is that CE3 fixes these things and makes other things nicer as well! :) Notably, <code>ContextShift</code> and <code>Blocker</code> are no more.</p>
 <h3 id="spawn">Spawn</h3>
 <p>CE3 introduces a re-designed typeclass <code>Async</code></p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb12-1" title="1"><span class="kw">trait</span> Async[F[_]] {</a>
@@ -152,6 +152,8 @@
 <p>There is also a similar operation <code>interruptible</code> which shifts to the blocking pool but will also attempt to cancel the operation using <code>Thread#interrupt()</code> in the event that the fiber is canceled.</p>
 <h3 id="work-stealing-pool">Work-stealing pool</h3>
 <p>CE3 also has a very exciting custom work-stealing threadpool implementation. This has numerous benefits over the <code>FixedThreadpool</code> used in CE2: - It maintains a work queue per core rather than a single global one so contention is dramatically reduced, especially with lots of cores - This means that we can implement thread affinity, where a fiber that yields is most likely to be re-scheduled on the same thread. This makes yielding much cheaper as if the fiber is immediately re-scheduled we don’t even have to flush CPU caches - Consequently we can support auto-yielding where a fiber will insert an <code>IO.cede</code> every fixed number of iterations of the runloop, stopping a rogue cpu-bound fiber from inadvertently pinning a CPU core</p>
+<h2 id="and-thats-it">And that’s it!</h2>
+<p>CE3 drastically simplifies threadpool usage and removes a number of significant gotchas, whilst significantly improving performance. Bring on the release!</p>
     </section>
 </article>
 
