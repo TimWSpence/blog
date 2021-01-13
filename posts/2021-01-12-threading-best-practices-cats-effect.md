@@ -193,7 +193,7 @@ trait Blocker {
 blocker.blockOn(IO(readFile)) >> IO(println("Shifted back to the pool that CS represents"))
 ```
 
-`blockOn` behaves exactly like `ContextShift#blockOn` - the provided `fa` will be run on the
+`blockOn` behaves exactly like `ContextShift#evalOn` - the provided `fa` will be run on the
 blocker's pool and then the continuation will run on the pool that `cs` represents.
 
 A common pattern in libraries for CE2 is to have an API which asks for a `Blocker`
