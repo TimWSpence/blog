@@ -156,7 +156,12 @@
 <div class="sourceCode" id="cb13"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb13-1" title="1">IO.<span class="fu">println</span>(<span class="st">&quot;current pool&quot;</span>) &gt;&gt; IO.<span class="fu">blocking</span>(<span class="fu">println</span>(<span class="st">&quot;blocking pool&quot;</span>)) &gt;&gt; IO.<span class="fu">println</span>(<span class="st">&quot;current pool&quot;</span>)</a></code></pre></div>
 <p>There is also a similar operation <code>interruptible</code> which shifts to the blocking pool but will also attempt to cancel the operation using <code>Thread#interrupt()</code> in the event that the fiber is canceled.</p>
 <h3 id="work-stealing-pool">Work-stealing pool</h3>
-<p>CE3 also has a very exciting custom work-stealing threadpool implementation. This has numerous benefits over the <code>FixedThreadpool</code> used in CE2: - It maintains a work queue per core rather than a single global one so contention is dramatically reduced, especially with lots of cores - This means that we can implement thread affinity, where a fiber that yields is most likely to be re-scheduled on the same thread. This makes yielding much cheaper as if the fiber is immediately re-scheduled we don’t even have to flush CPU caches - Consequently we can support auto-yielding where a fiber will insert an <code>IO.cede</code> every fixed number of iterations of the runloop, stopping a rogue cpu-bound fiber from inadvertently pinning a CPU core</p>
+<p>CE3 also has a very exciting custom work-stealing threadpool implementation. This has numerous benefits over the <code>FixedThreadpool</code> used in CE2:</p>
+<ul>
+<li>It maintains a work queue per core rather than a single global one so contention is dramatically reduced, especially with lots of cores</li>
+<li>This means that we can implement thread affinity, where a fiber that yields is most likely to be re-scheduled on the same thread. This makes yielding much cheaper as if the fiber is immediately re-scheduled we don’t even have to flush CPU caches</li>
+<li>Consequently we can support auto-yielding where a fiber will insert an <code>IO.cede</code> every fixed number of iterations of the runloop, stopping a rogue cpu-bound fiber from inadvertently pinning a CPU core</li>
+</ul>
 <h2 id="and-thats-it">And that’s it!</h2>
 <p>CE3 drastically simplifies threadpool usage and removes a number of significant gotchas, whilst significantly improving performance. Bring on the release!</p>
     </section>
