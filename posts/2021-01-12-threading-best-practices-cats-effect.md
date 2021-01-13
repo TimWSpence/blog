@@ -167,7 +167,7 @@ provides an instance which is backed by the default compute pool it provides.
 continuation be automatically shifted back eg
 
 ```scala
-CS.shift(blockingPool)(
+CS.evalOn(blockingPool)(
     IO(println("I run on the blocking pool"))
   ) >> IO(println("I am shifted onto the pool that CS represents"))
 ```
