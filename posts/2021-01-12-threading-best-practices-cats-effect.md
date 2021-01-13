@@ -61,7 +61,7 @@ Cats effect trivially supports this via lightweight `Fiber`s, each of which is
 an instance of the `IO` runloop. These are run `m:n` on the OS-level threads (so
 there is no direct mapping between fibers and threads) and can be created via
 `IO#start`, as well as various combinators like `IO#race`. It is important to
-note that this [cooperative
+note that this is [cooperative
 multi-tasking](https://en.wikipedia.org/wiki/Cooperative_multitasking) (as
 opposed to pre-emptive) so it is the responsibility of a fiber to yield control
 of the CPU by suspending its runloop periodically. In practice this is rarely an
