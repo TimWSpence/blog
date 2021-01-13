@@ -90,7 +90,7 @@
 <a class="sourceLine" id="cb4-7" title="7">}</a></code></pre></div>
 <p>An instance of this will be backed by some thread pool. <code>IOApp</code> provides an instance which is backed by the default compute pool it provides.</p>
 <p><code>evalOn</code> allows us to shift an operation onto another pool and have the continuation be automatically shifted back eg</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb5-1" title="1">CS.<span class="fu">shift</span>(blockingPool)(</a>
+<div class="sourceCode" id="cb5"><pre class="sourceCode scala"><code class="sourceCode scala"><a class="sourceLine" id="cb5-1" title="1">CS.<span class="fu">evalOn</span>(blockingPool)(</a>
 <a class="sourceLine" id="cb5-2" title="2">    <span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;I run on the blocking pool&quot;</span>))</a>
 <a class="sourceLine" id="cb5-3" title="3">  ) &gt;&gt; <span class="fu">IO</span>(<span class="fu">println</span>(<span class="st">&quot;I am shifted onto the pool that CS represents&quot;</span>))</a></code></pre></div>
 <p><code>shift</code> is a uni-directional shift of thread pool so that the continuation runs on the pool that the <code>ContextShift</code> represents</p>
