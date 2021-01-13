@@ -169,7 +169,7 @@ continuation be automatically shifted back eg
 ```scala
 CS.shift(blockingPool)(
     IO(println("I run on the blocking pool"))
-  ) >> IO(println("I am shifted onto the pool that CS represents"))`
+  ) >> IO(println("I am shifted onto the pool that CS represents"))
 ```
 
 `shift` is a uni-directional shift of thread pool so that the continuation runs on the pool that
