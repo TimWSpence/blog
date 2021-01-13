@@ -2,17 +2,19 @@
 title: Threading best practices in Cats Effect
 ---
 
-I frequently get asked what the best way to manage threadpools in Cats Effect is
-so this is my attempt to write a definitive explanation that I can point to. My intention
-is to cover both Cats Effect 2 and Cats Effect 3, although at the time of writing
-the latter is at milestone 5 so some details are subject to change. I'll endeavour to
-update this should that happen.
+I regularly get asked what the best way to manage threadpools in Cats Effect is
+so this is my attempt to write a consistent explanation that I can point to. My
+intention is to cover both Cats Effect 2 and Cats Effect 3, although at the time
+of writing the latter is at milestone 5 so some details are subject to change.
+I'll endeavour to update this should that happen.
 
 ## High-level goals
 
 The high-level goals of threading are covered in detail by [Daniel's gist](https://gist.github.com/djspiewak/46b543800958cf61af6efa8e072bfd5c) so I'll
 just give the executive summary. We are aiming for:
 - A single thread pool of roughly the number of available processors for compute-based operations
+  (depending on your application you may get better performance by leaving one or two cores
+  free for GC, etc)
 - An unbounded, cached threadpool for blocking operations
 - 1 or 2 high-priority threads for handling asynchronous I/O events, the handling of which should
   immediately be shifted to the compute pool
@@ -53,14 +55,17 @@ when we evaluate the real `IO` via one of the `unsafeRunX` methods or as part of
 ### Fibers
 
 Of course we tend to have many logical threads of execution in our applications.
-Cats effect trivially supports this via lightweight `Fiber`s, each of which is an instance
-of the `IO` runloop. These can be created via `IO#start`, as well as various
-combinators like `IO#race`. It is important to note that this an implementation of
-[cooperative
+Cats effect trivially supports this via lightweight `Fiber`s, each of which is
+an instance of the `IO` runloop. These can be created via `IO#start`, as well as
+various combinators like `IO#race`. It is important to note that this an
+implementation of [cooperative
 multi-tasking](https://en.wikipedia.org/wiki/Cooperative_multitasking) (as
-opposed to pre-emptive). In practice this means that it is actually possible for
-a fiber to take control of a CPU core and never give it back if it executes a
-tight CPU-bound loop like
+opposed to pre-emptive) so it is the responsibility of a fiber to yield control
+of the CPU by suspending its runloop periodically. In practice this is rarely an
+issue as fibers automatically yield at asynchronous boundaries (I/O, etc) but it
+does means that it is actually possible for a fiber to take control of a CPU
+core and never give it back if it executes a tight CPU-bound loop like
+
 ```scala
 def factorial(n: BigInt): IO[Int] = n match {
   case 0 => IO.pure(1)
@@ -72,9 +77,9 @@ def factorial(n: BigInt): IO[Int] = n match {
 factorial(10000).unsafeRunSync()
 ```
 
-If you have such a loop then you can insert a fairness boundary via `IO.shift` (CE2 but has other
-potential side-effects) or `IO.cede` (CE3), which will give another fiber an opportunity to run on
-the thread.
+If you have such a loop then you can insert a fairness boundary via `IO.shift`
+(CE2 but has other potential side-effects) or `IO.cede` (CE3), which will give
+another fiber an opportunity to run on the thread.
 
 Note that the runloop-per-fiber model means that we obtain maximum performance
 when all of our CPU threads are free to evaluate this runloop for one of our
@@ -98,18 +103,18 @@ it is quite different between CE2 and CE3.
 
 Of course, we do also need the ability to tell fibers to wait for conditions to
 be fulfilled. If we can't call thread blocking operations (eg Java/Scala builtin
-locks, semaphores, etc) then what can we do?  At this point we need to insist on
-a distinction between thread blocking operations (synchronous I/O, Java locks,
-semaphores, etc as above) and _semantic_ blocking, where a fiber yields control
-of the thread it was running on and indicates that it should wait for a
-condition to be satisfied.
+locks, semaphores, etc) then what can we do? It seems we need a notion of
+_semantic_ blocking, where the execution of a fiber is suspended and control of
+the thread it was running on is yielded.
 
-Cats effect provides various APIs which have these semantics, such as `IO.sleep(duration)`.
-Indeed this is why you must never call `IO(Thread.sleep(duration))` instead, as this is a
-thread blocking operation whereas `IO.sleep` is only semantically blocking.
+Cats effect provides various APIs which have these semantics, such as
+`IO.sleep(duration)`.  Indeed this is why you must never call
+`IO(Thread.sleep(duration))` instead, as this is a thread blocking operation
+whereas `IO.sleep` is only semantically blocking.
 
-The building block for arbitrary semantic blocking is `Deferred`, which is a purely functional
-promise that can only be completed once
+The building block for arbitrary semantic blocking is `Deferred`, which is a
+purely functional promise that can only be completed once
+
 ```scala
 trait Deferred[F[_], A] {
   def get: F[A]
@@ -117,11 +122,12 @@ trait Deferred[F[_], A] {
   def complete(a: A): F[Unit]
 }
 ```
-`Deferred#get` is semantically blocking until `Deferred#complete` is called and cats effect
-provides many more semantically blocking abstractions like semaphores that are built on top of
-this.
 
-## Summary (Part 1)
+`Deferred#get` is semantically blocking until `Deferred#complete` is called and
+cats effect provides many more semantically blocking abstractions like
+semaphores that are built on top of this.
+
+## Summary thus far
 
 So we've seen that best performance is achieved when we dedicate use of the compute pool
 to evaluating `IO` fiber runloops and ensure that we shift _all_ blocking operations
@@ -133,12 +139,14 @@ this in cats effect 2 and 3.
 ## Cats Effect 2
 
 CE2 `IOApp` provides a fixed execution context sized to the number of available
-cores for us to use for compute-bound work. Several abstractions are provided to
-facilitate shifting work to other pools.
+cores for us to use for compute-bound work. This maintains a global queue of
+runnables awaiting scheduling. Several abstractions are provided to facilitate
+shifting work to other pools.
 
 ### Context shift
 
-`ContextShift` is a pure representation of an execution context and looks a bit like this:
+`ContextShift` is a pure representation of a threadpool and looks a bit like this:
+
 ```scala
 trait ContextShift[F[_]] {
 
@@ -149,21 +157,23 @@ trait ContextShift[F[_]] {
 }
 ```
 
-Assume that an instance of this will be backed by some thread pool. `IOApp`
+An instance of this will be backed by some thread pool. `IOApp`
 provides an instance which is backed by the default compute pool it provides.
 
-`evalOn` allows us to shift an operation onto another pool and have the continuation be
-automatically shifted back eg
+`evalOn` allows us to shift an operation onto another pool and have the
+continuation be automatically shifted back eg
+
 ```scala
 CS.shift(blockingPool)(
     IO(println("I run on the blocking pool"))
-  ) >> IO(println("I run on the pool that backs CS"))`
+  ) >> IO(println("I am shifted onto the pool that CS represents"))`
 ```
 
 `shift` is a uni-directional shift of thread pool so that the continuation runs on the pool that
-backs the `ContextShift`
+the `ContextShift` represents
+
 ```scala
-IO(println("I run on some pool")) >> CS.shift >> IO(println("I run on the pool that backs CS"))
+IO(println("I run on some pool")) >> CS.shift >> IO(println("I run on the pool that CS represents"))
 ```
 
 ### Blocker
@@ -176,10 +186,25 @@ that is suitable for blocking operations.
 trait Blocker {
   def blockOn[F[_], A](fa: F[A])(implicit cs: ContextShift[F]): F[A]
 }
+
+blocker.blockOn(IO(readFile)) >> IO(println("Shifted back to the pool that CS represents"))
 ```
 
 `blockOn` behaves exactly like `ContextShift#blockOn` - the provided `fa` will be run on the
 blocker's pool and then the continuation will run on the pool that `cs` represents.
+
+A common pattern in libraries for CE2 is to have an API which asks for a `Blocker`
+and an implicit `ContextShift`
+
+```scala
+def api[F[_] : ContextShift](blocker: Blocker): F[Api]
+```
+
+In this case you _must_ provide the `ContextShift` given to you by `IOApp`
+(unless you're absolutely sure you know what you're doing) as the expectation
+of the library authors is that they can use that `ContextShift` to shift
+execution back to the compute pool after performing any blocking operations on
+the provided `Blocker`.
 
 ### Local reasoning
 
@@ -195,16 +220,21 @@ def prog(inner: IO[Unit]): IO[Unit] =
   } yield ()
 ```
 
-The problem is that `inner` could be something like `randomCS.shift` in which case the
-second print will be run on whatever thread pool `randomCS` represents.
+The problem is that `inner` could be something like `randomCS.shift` in which
+case the continuation (the second print) will be run on whatever thread pool
+`randomCS` represents.
 
-In fact, `shift` is _never_ safe for this reason and `evalOn` is only safe if it
-returns execution to the previous thread pool, rather than an arbitrary jump to
-the threadpool that backs whatever implicit `ContextShift` was in scope.
+In fact, `shift` is _never_ safe for this reason and `evalOn` is only safe if
+the `ContextShift` in implicit scope represents the threadpool that we were
+running on before `evalOn` shifted so that we shift back to where we were
+executing before. Nested `evalOn` is also prone to non-intuitive behaviour - see
+[this gist](https://gist.github.com/TimWSpence/c0879b00936f495fb53c51ef15227ad3)
+for one such example.
 
 What we need is the ability to locally change the threadpool with
 the guarantee that the continuation will be shifted to the previous
-pool aferwards. If you are familiar with `MonadReader`
+pool afterwards. If you are familiar with `MonadReader`
+
 ```scala
 trait MonadReader[F[_], R] {
   def ask: F[R_] //get the current execution context
@@ -214,17 +244,23 @@ trait MonadReader[F[_], R] {
                                                  //execution context
 }
 ```
+
 then you might see that this has exactly the semantics we need, where
 `local` is like `evalOn` in allowing us to locally change the
 execution context, but it will be restored to the previous value afterwards.
 
 ### Auto-yielding
 
-Auto-yielding is not supported in CE2 as yielding requires re-enqueuing the fiber
-on a global queue and waiting for it to be re-scheduled. This is too expensive
-to be inserted automatically. If you have a tight CPU-bound loop then you should
-insert `IO.shift` where appropriate whilst ensuring that the implicit `ContextShift`
-is the one that represents the compute pool.
+Auto-yielding is the automatic insertion of fiber yields into the runloop to
+ensure that a single fiber does not hog a CPU core and is not supported in CE2
+as yielding requires re-enqueuing the fiber on a global queue and waiting for it
+to be re-scheduled. This is too expensive to be inserted automatically as the
+global queue requires coordination between the CPU cores to access this shared
+resource and will also result in CPU core-local caches being invalidated. If you
+have a tight CPU-bound loop then you should insert `IO.shift` where appropriate
+whilst ensuring that the implicit `ContextShift` is the one that represents the
+current execution context (so you don't accidentally shift the execution to
+another pool).
 
 ### Obtaining a handle to the compute pool
 
@@ -262,12 +298,12 @@ trait Async[F[_]] {
   def executionContext: F[ExecutionContext]
 }
 ```
-which has exactly the `MonadReader` semantics we discussed above. Note that the
-execution shifts back to the threadpool defined by `Async#executionContext`, rather
-than a non-local jump to the threadpool belonging to some implicit `ContextShift`.
 
-Also note that `Async[IO].executionContext` in `IOApp` will give us a handle to the
-compute pool without the `WithContext` machinery.
+which has exactly the `MonadReader` semantics we discussed above. Note that the
+execution shifts back to the threadpool defined by `Async#executionContext`.
+
+Also note that `Async[IO].executionContext` in `IOApp` will give us a handle to
+the compute pool without the `WithContext` machinery.
 
 ### Blocking
 
@@ -279,9 +315,9 @@ This means that we can simply write
 IO.println("current pool") >> IO.blocking(println("blocking pool")) >> IO.println("current pool")
 ```
 
-There is also an analogous operation `interruptible` which shifts to the blocking pool
-but will attempt to cancel the operation using `Thread#interrupt()` in the event that
-the fiber is canceled.
+There is also a similar operation `interruptible` which shifts to the blocking
+pool but will also attempt to cancel the operation using `Thread#interrupt()` in
+the event that the fiber is canceled.
 
 ### Work-stealing pool
 
